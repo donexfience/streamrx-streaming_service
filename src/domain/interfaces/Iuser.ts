@@ -7,7 +7,7 @@ export interface SocialLink {
 }
 
 export interface IUser {
-  id?: number;
+  id?: string;
   username: string;
   email: string;
   createdAt?: Date;

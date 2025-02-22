@@ -8,8 +8,8 @@ import {
 
 @Entity("users")
 export class UserModel {
-  @PrimaryGeneratedColumn()
-  id: number;
+  @Column({ primary: true })
+  id: string;
 
   @Column({ unique: true })
   email: string;

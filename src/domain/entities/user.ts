@@ -1,7 +1,7 @@
 import { IUser, SocialLink } from "../interfaces/Iuser";
 
 export class UserEntity implements IUser {
-  id?: number;
+  id?: string;
   username: string;
   email: string;
   createdAt?: Date;
@@ -15,7 +15,7 @@ export class UserEntity implements IUser {
   tags: string[];
 
   constructor(props: {
-    id?: number;
+    id?: string;
     username: string;
     email: string;
     createdAt?: Date;
