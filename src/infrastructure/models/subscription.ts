@@ -22,14 +22,14 @@ export class ChannelSubscriptionModel {
   user: UserModel;
 
   @Column({ name: "user_id", type: "integer", nullable: false })
-  userId: number;
+  userId: string;
 
   @ManyToOne(() => ChannelModel, { nullable: false })
   @JoinColumn({ name: "channel_id" })
   channel: ChannelModel;
 
   @Column({ name: "channel_id", type: "integer", nullable: false })
-  channelId: number;
+  channelId: string;
 
   @Column({ name: "notifications_enabled", type: "boolean", default: true })
   notificationsEnabled: boolean;

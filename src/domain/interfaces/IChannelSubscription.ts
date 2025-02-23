@@ -1,7 +1,7 @@
 export interface IChannelSubscription {
-  id?: number;
-  userId: number;
-  channelId: number;
+  id?: string;
+  userId: string;
+  channelId: string;
   notificationsEnabled: boolean;
   status: "active" | "cancelled";
   createdAt?: Date;

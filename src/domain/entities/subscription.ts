@@ -1,18 +1,18 @@
 import { IChannelSubscription } from "./../interfaces/IChannelSubscription";
 
 export class ChannelSubscriptionEntity implements IChannelSubscription {
-  id?: number;
-  userId: number;
-  channelId: number;
+  id?: string;
+  userId: string;
+  channelId: string;
   notificationsEnabled: boolean;
   status: "active" | "cancelled";
   createdAt?: Date;
   updatedAt?: Date;
 
   constructor(props: {
-    id?: number;
-    userId: number;
-    channelId: number;
+    id?: string;
+    userId: string;
+    channelId: string;
     notificationsEnabled?: boolean;
     status?: "active" | "cancelled";
     createdAt?: Date;

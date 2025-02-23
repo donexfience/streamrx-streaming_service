@@ -5,7 +5,7 @@ export class UpdateUser {
   constructor(private userRepository: IUserRepository) {}
 
   async execute(
-    id: number,
+    id: string,
     updateData: Partial<UserEntity>
   ): Promise<UserEntity | null> {
     return await this.userRepository.updateUser(id, updateData);
