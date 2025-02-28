@@ -24,7 +24,7 @@ export class ChannelModel {
   @JoinColumn({ name: "owner_id" })
   owner: UserModel;
 
-  @Column({ name: "owner_id", type: "integer", nullable: false })
+  @Column({ name: "owner_id", type: "string", nullable: false })
   ownerId: string;
 
   @Column("varchar", { array: true, nullable: false })

@@ -1,6 +1,6 @@
 import { Repository } from "typeorm";
-import { ChannelModel } from "../models/channel"; 
-import { ChannelEntity } from "../../domain/entities/channel"; 
+import { ChannelModel } from "../models/channel";
+import { ChannelEntity } from "../../domain/entities/channel";
 import { AppDataSource } from "../../config/dbConfig";
 import { IChannelRepository } from "../../application/interface/IChannelRepository";
 
@@ -21,7 +21,9 @@ export class ChannelRepository implements IChannelRepository {
     channelId: string,
     updateData: Partial<ChannelEntity>
   ): Promise<ChannelEntity> {
+    console.log("update need data", channelId, updateData);
     const result = await this.channelRepository.update(channelId, updateData);
+    console.log(result, "updated channel");
     if (result.affected === 0) {
       throw new Error(`Channel with ID ${channelId} not found`);
     }
@@ -29,26 +31,27 @@ export class ChannelRepository implements IChannelRepository {
       where: { id: channelId },
       relations: ["owner"],
     });
+    console.log(updatedChannel, "after updation");
     if (!updatedChannel) {
       throw new Error(`Channel with ID ${channelId} not found after update`);
     }
     return new ChannelEntity(updatedChannel);
   }
 
-  async delete(channelId: string): Promise<void> { 
+  async delete(channelId: string): Promise<void> {
     const result = await this.channelRepository.delete(channelId);
     if (result.affected === 0) {
       throw new Error(`Channel with ID ${channelId} not found`);
     }
   }
 
-  async subscribe(channelId: string): Promise<void> { 
+  async subscribe(channelId: string): Promise<void> {
     console.log(channelId, "channel Id of the subscribing");
     try {
       const result = await this.channelRepository
         .createQueryBuilder()
         .update(ChannelModel)
-        .set({ subscribersCount: () => `"subscribersCount" + 1` }) 
+        .set({ subscribersCount: () => `"subscribersCount" + 1` })
         .where("id = :id", { id: channelId })
         .execute();
 
@@ -62,12 +65,12 @@ export class ChannelRepository implements IChannelRepository {
     }
   }
 
-  async unsubscribe(channelId: string): Promise<void> { 
+  async unsubscribe(channelId: string): Promise<void> {
     try {
       const result = await this.channelRepository
         .createQueryBuilder()
         .update(ChannelModel)
-        .set({ subscribersCount: () => `"subscribersCount" - 1` }) 
+        .set({ subscribersCount: () => `"subscribersCount" - 1` })
         .where("id = :id", { id: channelId })
         .execute();
 
@@ -80,7 +83,7 @@ export class ChannelRepository implements IChannelRepository {
     }
   }
 
-  async findById(channelId: string): Promise<ChannelEntity> { 
+  async findById(channelId: string): Promise<ChannelEntity> {
     const channel = await this.channelRepository.findOne({
       where: { id: channelId },
       relations: ["owner"],
@@ -91,9 +94,9 @@ export class ChannelRepository implements IChannelRepository {
     return new ChannelEntity(channel);
   }
 
-  async findByEmails(email: string): Promise<ChannelEntity> { 
+  async findByEmails(email: string): Promise<ChannelEntity> {
     const channel = await this.channelRepository.findOne({
-      where: { owner: { email } }, 
+      where: { owner: { email } },
       relations: ["owner"],
     });
     if (!channel) {

@@ -1,6 +1,9 @@
 import "reflect-metadata";
 import { DataSource } from "typeorm";
 import { UserModel } from "../infrastructure/models/user";
+import { ChannelModel } from "../infrastructure/models/channel";
+import { ChannelSubscriptionModel } from "../infrastructure/models/subscription";
+import { StreamModel } from "../infrastructure/models/stream";
 
 export const AppDataSource = new DataSource({
   type: "postgres",
@@ -11,7 +14,7 @@ export const AppDataSource = new DataSource({
   database: process.env.POSTGRES_DB,
   synchronize: true,
   logging: true,
-  entities: [UserModel],
+  entities: [UserModel, ChannelModel, ChannelSubscriptionModel,StreamModel],
   migrations: [],
   subscribers: [],
 });
