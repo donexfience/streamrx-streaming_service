@@ -1,5 +1,5 @@
 import { ChannelSubscriptionEntity } from "../../../domain/entities/subscription";
-import { IChannelSubscriptionRepository } from "../../interface/IChannelSubscriptionRepository";
+import { IChannelSubscriptionRepository } from "../../interface/IChannelSubscriptionRepostiory";
 
 export class GetChannelSubscriptionByChannelUserId {
   constructor(private subscriptionRepository: IChannelSubscriptionRepository) {}

@@ -1,8 +1,8 @@
 import { Repository } from "typeorm";
 import { AppDataSource } from "../../config/dbConfig";
 import { ChannelSubscriptionModel } from "../models/subscription";
-import { IChannelSubscriptionRepository } from "../../application/interface/IChannelSubscriptionRepository";
 import { ChannelSubscriptionEntity } from "../../domain/entities/subscription";
+import { IChannelSubscriptionRepository } from "../../application/interface/IChannelSubscriptionRepostiory";
 
 export class ChannelSubscriptionRepository
   implements IChannelSubscriptionRepository

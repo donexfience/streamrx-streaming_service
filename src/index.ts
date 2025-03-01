@@ -10,16 +10,15 @@ import {
 import fs from "fs";
 import { HttpCode } from "./_lib/statusCodes/constants-http-status";
 import { AppDataSource } from "./config/dbConfig";
-import config from "./config/config";
 import { SocketService } from "./infrastructure/service/socketServiceManager";
 import { GetLatestStreamUsecase } from "./application/usecases/stream/GetLatestStreamuseCase";
 import { GetSubscriptionStatus } from "./application/usecases/subscriptions/getSubscripitonStatusUsecase";
 import { GetChannelById } from "./application/usecases/channel/GetChannelById";
-import { ChannelSubscriptionRepository } from "./infrastructure/repositories/channelSubcriptionRepository";
 import { ChannelRepository } from "./infrastructure/repositories/channelRepository";
 import { StreamQueryRepository } from "./infrastructure/repositories/query/streamQueryMongoRepository";
 import { Database } from "./config/mongoConnection";
 import { StreamSyncConsumer } from "./infrastructure/repositories/events/streamEvents";
+import { ChannelSubscriptionRepository } from "./infrastructure/repositories/channelSubcriptionRepository";
 
 interface ServerOptions {
   port: number;

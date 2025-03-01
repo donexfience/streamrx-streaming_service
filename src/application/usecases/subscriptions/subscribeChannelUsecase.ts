@@ -1,6 +1,6 @@
 import { ChannelSubscriptionEntity } from "../../../domain/entities/subscription";
 import { IChannelRepository } from "../../interface/IChannelRepository";
-import { IChannelSubscriptionRepository } from "../../interface/IChannelSubscriptionRepository";
+import { IChannelSubscriptionRepository } from "../../interface/IChannelSubscriptionRepostiory";
 
 export class SubscribeToChannel {
   constructor(

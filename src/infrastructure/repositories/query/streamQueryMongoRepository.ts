@@ -15,6 +15,7 @@ export class StreamQueryRepository implements IStreamQueryRepository {
 
   async findByChannelId(channelId: string): Promise<StreamEntity[]> {
     const streams: any = await StreamMongoModel.find({ channelId }).exec();
+    console.log(streams, "streamasssssssssssssssssss");
     return streams.map((stream: any) => new StreamEntity(stream.toObject()));
   }
 
