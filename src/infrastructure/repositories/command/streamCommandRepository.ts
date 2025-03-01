@@ -1,51 +1,35 @@
 import { Repository } from "typeorm";
-import { StreamModel } from "../models/stream";
-import { AppDataSource } from "../../config/dbConfig";
-import { IStreamRepository } from "../../application/interface/IStreamRepository";
-import { StreamEntity } from "../../domain/entities/streaming";
+import { IStreamRepository } from "../../../application/interface/IStreamRepository";
+import { StreamModel } from "../../models/command/stream";
+import { AppDataSource } from "../../../config/dbConfig";
+import { StreamEntity } from "../../../domain/entities/streaming";
+import { RabbitMQConnection, RabbitMQProducer } from "streamrx_common";
 
 export class StreamRepository implements IStreamRepository {
   private repository: Repository<StreamModel>;
+  private rabbitMQProducer: RabbitMQProducer;
 
   constructor() {
     this.repository = AppDataSource.getRepository(StreamModel);
+    const rabbitmqConnection = RabbitMQConnection.getInstance();
+    this.rabbitMQProducer = new RabbitMQProducer(rabbitmqConnection);
   }
 
   async create(stream: Partial<StreamEntity>): Promise<StreamEntity> {
     try {
-      console.log(stream, "stream data in the repository");
       const streamModel = this.repository.create(stream);
       const savedStream = await this.repository.save(streamModel);
-      return new StreamEntity(savedStream);
+      const streamEntity = new StreamEntity(savedStream);
+      await this.rabbitMQProducer.publishToExchange(
+        "stream-created",
+        "",
+        streamEntity
+      );
+      return streamEntity;
     } catch (error) {
       console.log(error, "error in the repository of create stream");
       throw error;
     }
-  }
-
-  async findById(id: string): Promise<StreamEntity | null> {
-    const stream = await this.repository.findOne({
-      where: { id },
-      relations: ["channel"],
-    });
-    return stream ? new StreamEntity(stream) : null;
-  }
-
-  async findByChannelId(channelId: string): Promise<StreamEntity[]> {
-    const streams = await this.repository.find({
-      where: { channelId },
-      relations: ["channel"],
-    });
-    return streams.map((stream) => new StreamEntity(stream));
-  }
-  async findLatestByChannelId(channelId: string): Promise<StreamEntity | null> {
-    const stream = await this.repository.findOne({
-      where: { channelId },
-      relations: ["channel"],
-      order: { createdAt: "DESC" },
-    });
-
-    return stream ? new StreamEntity(stream) : null;
   }
 
   async edit(
@@ -63,7 +47,13 @@ export class StreamRepository implements IStreamRepository {
       const updatedStream = this.repository.merge(existingStream, streamData);
       updatedStream.updatedAt = new Date();
       const savedStream = await this.repository.save(updatedStream);
-      return new StreamEntity(savedStream);
+      const streamEntity = new StreamEntity(savedStream);
+      await this.rabbitMQProducer.publishToExchange(
+        "stream-updated",
+        "",
+        streamEntity
+      );
+      return streamEntity;
     } catch (error) {
       console.log(error, "error in the repository of edit stream");
       throw error;

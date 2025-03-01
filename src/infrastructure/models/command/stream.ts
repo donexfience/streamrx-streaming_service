@@ -7,7 +7,7 @@ import {
   ManyToOne,
   JoinColumn,
 } from "typeorm";
-import { ChannelModel } from "./channel";
+import { ChannelModel } from "../channel";
 
 @Entity("streams")
 export class StreamModel {

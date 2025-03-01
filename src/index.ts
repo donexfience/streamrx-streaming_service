@@ -15,9 +15,11 @@ import { SocketService } from "./infrastructure/service/socketServiceManager";
 import { GetLatestStreamUsecase } from "./application/usecases/stream/GetLatestStreamuseCase";
 import { GetSubscriptionStatus } from "./application/usecases/subscriptions/getSubscripitonStatusUsecase";
 import { GetChannelById } from "./application/usecases/channel/GetChannelById";
-import { StreamRepository } from "./infrastructure/repositories/streamRepository";
 import { ChannelSubscriptionRepository } from "./infrastructure/repositories/channelSubcriptionRepository";
 import { ChannelRepository } from "./infrastructure/repositories/channelRepository";
+import { StreamQueryRepository } from "./infrastructure/repositories/query/streamQueryMongoRepository";
+import { Database } from "./config/mongoConnection";
+import { StreamSyncConsumer } from "./infrastructure/repositories/events/streamEvents";
 
 interface ServerOptions {
   port: number;
@@ -60,8 +62,11 @@ export class Server {
     console.log(`API Prefix: ${this.apiPrefix}`);
 
     await AppDataSource.initialize();
+    await this.initializeServices();
+    const streamSyncConsumer = new StreamSyncConsumer();
+    await streamSyncConsumer.start();
     const getLatestStreamUsecase = new GetLatestStreamUsecase(
-      new StreamRepository()
+      new StreamQueryRepository()
     );
     const getSubscriptionStatus = new GetSubscriptionStatus(
       new ChannelSubscriptionRepository()
@@ -114,5 +119,9 @@ export class Server {
 
   public getSocketIO(): SocketIOServer {
     return this.io;
+  }
+
+  private async initializeServices() {
+    await Database.connect();
   }
 }

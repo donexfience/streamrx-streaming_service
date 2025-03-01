@@ -1,9 +1,8 @@
 import { StreamEntity } from "../../../domain/entities/streaming";
-import { StreamModel } from "../../../infrastructure/models/stream";
-import { StreamRepository } from "../../../infrastructure/repositories/streamRepository";
+import { StreamQueryRepository } from "../../../infrastructure/repositories/query/streamQueryMongoRepository";
 
 export class GetLatestStreamUsecase {
-  constructor(private streamRepository: StreamRepository) {}
+  constructor(private streamRepository: StreamQueryRepository) {}
   async execute(channelId: string): Promise<StreamEntity | null> {
     return await this.streamRepository.findLatestByChannelId(channelId);
   }

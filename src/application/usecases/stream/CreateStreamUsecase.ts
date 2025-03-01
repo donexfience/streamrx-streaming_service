@@ -1,5 +1,5 @@
-import { StreamModel } from "../../../infrastructure/models/stream";
-import { StreamRepository } from "../../../infrastructure/repositories/streamRepository";
+import { StreamModel } from "../../../infrastructure/models/command/stream";
+import { StreamRepository } from "../../../infrastructure/repositories/command/streamCommandRepository";
 
 export class CreateStreamUsecase {
   constructor(private streamRepository: StreamRepository) {}

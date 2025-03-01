@@ -3,7 +3,7 @@ import { DataSource } from "typeorm";
 import { UserModel } from "../infrastructure/models/user";
 import { ChannelModel } from "../infrastructure/models/channel";
 import { ChannelSubscriptionModel } from "../infrastructure/models/subscription";
-import { StreamModel } from "../infrastructure/models/stream";
+import { StreamModel } from "../infrastructure/models/command/stream";
 
 export const AppDataSource = new DataSource({
   type: "postgres",

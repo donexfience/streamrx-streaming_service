@@ -1,8 +1,8 @@
-import { StreamModel } from "../../../infrastructure/models/stream";
-import { StreamRepository } from "../../../infrastructure/repositories/streamRepository";
+import { StreamModel } from "../../../infrastructure/models/command/stream";
+import { StreamQueryRepository } from "../../../infrastructure/repositories/query/streamQueryMongoRepository";
 
 export class GetStreamByIdUsecase {
-  constructor(private streamRepository: StreamRepository) {}
+  constructor(private streamRepository: StreamQueryRepository) {}
   async execute(id: string): Promise<StreamModel | null> {
     const stream = await this.streamRepository.findById(id);
     if (!stream) {

@@ -2,8 +2,9 @@ import { Request, Response } from "express";
 import { CreateStreamUsecase } from "../../application/usecases/stream/CreateStreamUsecase";
 import { GetStreamByChannelIdUsecase } from "../../application/usecases/stream/GetStreamByChannelId";
 import { GetStreamByIdUsecase } from "../../application/usecases/stream/GetStreamById";
-import { StreamRepository } from "../../infrastructure/repositories/streamRepository";
 import { EditStreamUsecase } from "../../application/usecases/stream/EditStreamUseCase";
+import { StreamQueryRepository } from "../../infrastructure/repositories/query/streamQueryMongoRepository";
+import { StreamRepository } from "../../infrastructure/repositories/command/streamCommandRepository";
 
 export class StreamController {
   private readonly createStreamUseCase: CreateStreamUsecase;
@@ -12,13 +13,14 @@ export class StreamController {
   private readonly EditStreamUsecase: EditStreamUsecase;
 
   constructor() {
-    const streamRepository = new StreamRepository();
-    this.createStreamUseCase = new CreateStreamUsecase(streamRepository);
+    const streamCommandRepository = new StreamRepository();
+    const streamQueryRepository = new StreamQueryRepository();
+    this.createStreamUseCase = new CreateStreamUsecase(streamCommandRepository);
     this.getStreamByChannelIdUsecase = new GetStreamByChannelIdUsecase(
-      streamRepository
+      streamQueryRepository
     );
-    this.getStreamByIdUsecase = new GetStreamByIdUsecase(streamRepository);
-    this.EditStreamUsecase = new EditStreamUsecase(streamRepository);
+    this.getStreamByIdUsecase = new GetStreamByIdUsecase(streamQueryRepository);
+    this.EditStreamUsecase = new EditStreamUsecase(streamCommandRepository);
   }
 
   async createStream(req: Request, res: Response) {
