@@ -19,6 +19,8 @@ import { StreamQueryRepository } from "./infrastructure/repositories/query/strea
 import { Database } from "./config/mongoConnection";
 import { StreamSyncConsumer } from "./infrastructure/repositories/events/streamEvents";
 import { ChannelSubscriptionRepository } from "./infrastructure/repositories/channelSubcriptionRepository";
+import { GetUserById } from "./application/usecases/user/GetuserById";
+import { UserRepository } from "./infrastructure/repositories/userRepostiory";
 
 interface ServerOptions {
   port: number;
@@ -71,12 +73,14 @@ export class Server {
       new ChannelSubscriptionRepository()
     );
     const getChannelById = new GetChannelById(new ChannelRepository());
+    const getUserById = new GetUserById(new UserRepository());
 
     this.socketService = new SocketService(
       this.io,
       getLatestStreamUsecase,
       getSubscriptionStatus,
-      getChannelById
+      getChannelById,
+      getUserById
     );
 
     this.app.use(express.json());
