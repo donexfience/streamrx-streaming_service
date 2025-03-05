@@ -8,6 +8,7 @@ import {
   JoinColumn,
 } from "typeorm";
 import { ChannelModel } from "../channel";
+import { UserModel } from "../user";
 
 @Entity("streams")
 export class StreamModel {
@@ -38,9 +39,9 @@ export class StreamModel {
       url: string;
       s3Key: string;
     };
-  }; 
+  };
 
-  @Column("jsonb", { nullable: false })
+  @Column("jsonb", { nullable: true })
   schedule: {
     dateTime: Date;
   };
@@ -74,14 +75,19 @@ export class StreamModel {
 
   @Column({ name: "channel_id", type: "string", nullable: false })
   channelId: string;
+  @ManyToOne(() => UserModel, (user) => user.id, { nullable: false })
+  @JoinColumn({ name: "creator_id" })
+  creator: UserModel;
 
+  @Column({ name: "creator_id", type: "string", nullable: false })
+  createdBy: string;
   @Column({
     type: "varchar",
-    enum: ["pending", "scheduled", "started", "stopped"],
+    enum: ["pending", "scheduled", "started", "stopped", "missed"],
     default: "pending",
     nullable: false,
   })
-  status: "pending" | "scheduled" | "started" | "stopped"; 
+  status: "pending" | "scheduled" | "started" | "stopped" | "missed";
 
   @CreateDateColumn({ name: "created_at" })
   createdAt: Date;

@@ -9,7 +9,7 @@ const StreamSchema = new Schema({
   visibility: { type: String, required: true },
   thumbnail: { type: String },
   fallbackVideo: { type: Map, of: new Schema({ url: String, s3Key: String }) },
-  schedule: { dateTime: { type: Date, required: true } },
+  schedule: { dateTime: { type: Date, required: false, default: null } },
   playlistId: { type: String },
   liveChat: {
     enabled: { type: Boolean, default: true },
@@ -22,9 +22,10 @@ const StreamSchema = new Schema({
   channelId: { type: String, required: true },
   status: {
     type: String,
-    enum: ["pending", "scheduled", "started", "stopped"],
+    enum: ["pending", "scheduled", "started", "stopped", "missed"],
     default: "pending",
   },
+  createdBy: { type: Schema.Types.ObjectId, ref: "User", required: true },
   createdAt: { type: Date, required: true },
   updatedAt: { type: Date, required: true },
 });

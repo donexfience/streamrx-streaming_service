@@ -21,6 +21,8 @@ import { StreamSyncConsumer } from "./infrastructure/repositories/events/streamE
 import { ChannelSubscriptionRepository } from "./infrastructure/repositories/channelSubcriptionRepository";
 import { GetUserById } from "./application/usecases/user/GetuserById";
 import { UserRepository } from "./infrastructure/repositories/userRepostiory";
+import { InviteRepository } from "./infrastructure/repositories/inviteRepository";
+import { InviteModel } from "./infrastructure/models/invite";
 
 interface ServerOptions {
   port: number;
@@ -74,13 +76,15 @@ export class Server {
     );
     const getChannelById = new GetChannelById(new ChannelRepository());
     const getUserById = new GetUserById(new UserRepository());
+    const inviteRepository = new InviteRepository();
 
     this.socketService = new SocketService(
       this.io,
       getLatestStreamUsecase,
       getSubscriptionStatus,
       getChannelById,
-      getUserById
+      getUserById,
+      inviteRepository
     );
 
     this.app.use(express.json());

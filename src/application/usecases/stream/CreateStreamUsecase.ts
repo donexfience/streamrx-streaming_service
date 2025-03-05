@@ -43,6 +43,7 @@ export class CreateStreamUsecase {
           slowModeDelay: "60",
         },
         channelId: streamData.channelId,
+        createdBy: streamData.createdBy,
       };
       console.log(stream, "stream data in the usecase");
       return await this.streamRepository.create(stream);

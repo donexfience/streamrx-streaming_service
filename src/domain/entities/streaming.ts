@@ -19,7 +19,9 @@ export class StreamEntity {
   };
   channelId: string;
   channel: any;
-  status: "pending" | "scheduled" | "started" | "stopped";
+  creator: any;
+  createdBy: string;
+  status: "pending" | "scheduled" | "started" | "stopped" | "missed";
   createdAt: Date;
   updatedAt: Date;
 

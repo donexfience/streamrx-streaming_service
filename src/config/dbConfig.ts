@@ -4,6 +4,7 @@ import { UserModel } from "../infrastructure/models/user";
 import { ChannelModel } from "../infrastructure/models/channel";
 import { ChannelSubscriptionModel } from "../infrastructure/models/subscription";
 import { StreamModel } from "../infrastructure/models/command/stream";
+import { InviteModel } from "../infrastructure/models/invite";
 
 export const AppDataSource = new DataSource({
   type: "postgres",
@@ -14,7 +15,13 @@ export const AppDataSource = new DataSource({
   database: process.env.POSTGRES_DB,
   synchronize: true,
   logging: true,
-  entities: [UserModel, ChannelModel, ChannelSubscriptionModel,StreamModel],
+  entities: [
+    UserModel,
+    ChannelModel,
+    ChannelSubscriptionModel,
+    StreamModel,
+    InviteModel,
+  ],
   migrations: [],
   subscribers: [],
 });
