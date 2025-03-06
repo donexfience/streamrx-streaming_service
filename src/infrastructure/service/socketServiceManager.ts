@@ -1,11 +1,11 @@
 import { Socket } from "socket.io";
 import { Server as SocketIOServer } from "socket.io";
 import { types as mediasoupTypes } from "mediasoup";
-import { createWorkers } from "../../config/Workers/createWorker"; // Your worker setup
+import { createWorkers } from "../../config/Workers/createWorker";
 import { GetLatestStreamUsecase } from "../../application/usecases/stream/GetLatestStreamuseCase";
 import { GetSubscriptionStatus } from "../../application/usecases/subscriptions/getSubscripitonStatusUsecase";
 import config from "../../config/config";
-import createWebRtcTransportBothKinds from "../../config/createWebRtcTransportKinds"; // Your transport utility
+import createWebRtcTransportBothKinds from "../../config/createWebRtcTransportKinds";
 import { GetChannelById } from "../../application/usecases/channel/GetChannelById";
 import { GetUserById } from "../../application/usecases/user/GetuserById";
 import { InviteRepository } from "../repositories/inviteRepository";
@@ -80,8 +80,9 @@ export class SocketService {
     if (!stream) return false;
 
     const channel = await this.getChannelById.execute(roomId);
+    console.log(channel, "channel in can user join room");
     const isChannelOwner = channel.ownerId === userId;
-
+    console.log(isChannelOwner, "is channel owner");
     let room = this.rooms.get(roomId);
     if (!room) {
       const worker = this.getNextWorker();
@@ -107,7 +108,7 @@ export class SocketService {
       socket.handshake.auth.role = "host";
       return true;
     }
-
+    console.log(socket.handshake.auth.role, "socket.handshake.auth.role");
     if (isChannelOwner && room.hostId === userId) {
       socket.handshake.auth.role = "host";
       return true;
@@ -115,8 +116,10 @@ export class SocketService {
       socket.emit("error", { message: "Another host is already in this room" });
       return false;
     }
-    const inviteToken = socket.handshake.query.token as string;
+    const inviteToken = socket.handshake.auth.token as string;
+    console.log(inviteToken, "invite token");
     const invite = await this.inviteRepository.findByToken(inviteToken);
+    console.log(invite, "invite got from backend");
     if (
       invite &&
       invite.expiresAt > new Date() &&
@@ -127,7 +130,8 @@ export class SocketService {
       return true;
     }
     if (socket.handshake.auth.role === "guest") {
-      const inviteToken = socket.handshake.query.token as string;
+      console.log("in teh if of guest role");
+      const inviteToken = socket.handshake.auth.token as string;
       const invite = await this.inviteRepository.findByToken(inviteToken);
       if (
         invite &&
@@ -212,27 +216,26 @@ export class SocketService {
       // Join Room
       socket.on(
         "joinRoom",
-        async ({ roomId, userId, guestId, guestName }, callback) => {
+        async ({ roomId, userId, guestId, guestName }, callback) => {   
           const permission = await this.canUserJoinRoom(userId, roomId, socket);
           if (!permission) {
             socket.emit("error", { message: "Permission denied" });
-            socket.disconnect(true);
             return;
           }
           socket.data.userId = userId;
+          socket.data.userId = guestId || userId;
           socket.data.role = socket.handshake.auth.role;
           socket.join(roomId);
           const room = this.rooms.get(roomId);
           if (!room) return;
 
           if (socket.handshake.auth.role === "guest" && !room.hostId) {
-            console.log("not host and no host present");
             socket.emit("joinDenied", {
               message: "Host not present. Please wait.",
             });
-            return false;
+            return;
           }
-          if (guestId && guestName && !room.participants.has(guestId)) {
+          if (guestId && guestName) {
             socket.data.guestName = guestName;
             room.participants.set(guestId, { name: guestName, role: "guest" });
             this.io.to(roomId).emit("guestAdded", { guestId, guestName });
@@ -512,32 +515,8 @@ export class SocketService {
           socket.emit("error", { message: "Unauthorized" });
           return;
         }
-        console.log("inside the approveJoin event");
         room.allowedGuests.add(guestId);
-        const guestSocket = this.io.sockets.sockets.get(guestSocketId);
-        if (guestSocket) {
-          guestSocket.join(roomId);
-          room.participants.set(guestId, { name: "Guest", role: "guest" });
-          this.io.to(guestSocketId).emit("joinApproved");
-          this.io
-            .to(roomId)
-            .emit("guestAdded", { guestId, guestName: "Guest" });
-          this.io.to(roomId).emit(
-            "participantsUpdated",
-            Array.from(room.participants.entries()).map(([userId, data]) => ({
-              userId,
-              ...data,
-            }))
-          );
-
-          const producers = Array.from(room.producers.entries()).map(
-            ([producerId, producer]) => ({
-              producerId,
-              userId: producer.appData.userId,
-            })
-          );
-          this.io.to(guestSocketId).emit("existingProducers", { producers });
-        }
+        this.io.to(guestSocketId).emit("joinApproved");
       });
       socket.on("denyJoin", ({ roomId, guestId }) => {
         const room = this.rooms.get(roomId);

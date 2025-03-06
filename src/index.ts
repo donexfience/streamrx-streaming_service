@@ -3,11 +3,7 @@ import express, { Router, Request, Response, Application } from "express";
 import morgan from "morgan";
 import { Socket } from "socket.io";
 import { Server as SocketIOServer } from "socket.io";
-import {
-  createServer as createHttpsServer,
-  Server as HttpsServer,
-} from "https";
-import fs from "fs";
+import { createServer as createHttpServer, Server as HttpServer } from "http";
 import { HttpCode } from "./_lib/statusCodes/constants-http-status";
 import { AppDataSource } from "./config/dbConfig";
 import { SocketService } from "./infrastructure/service/socketServiceManager";
@@ -22,7 +18,6 @@ import { ChannelSubscriptionRepository } from "./infrastructure/repositories/cha
 import { GetUserById } from "./application/usecases/user/GetuserById";
 import { UserRepository } from "./infrastructure/repositories/userRepostiory";
 import { InviteRepository } from "./infrastructure/repositories/inviteRepository";
-import { InviteModel } from "./infrastructure/models/invite";
 
 interface ServerOptions {
   port: number;
@@ -35,7 +30,7 @@ export class Server {
   private readonly port: number;
   private readonly routes: Router;
   private readonly apiPrefix: string;
-  private httpsServer: HttpsServer;
+  private httpServer: HttpServer;
   private io: SocketIOServer;
   private socketService: SocketService;
 
@@ -46,13 +41,11 @@ export class Server {
     this.routes = routes;
     this.apiPrefix = apiPrefix;
 
-    const key = fs.readFileSync("./src/config/cert.key");
-    const cert = fs.readFileSync("./src/config/cert.crt");
-    const options = { key, cert };
+    // Create HTTP server
+    this.httpServer = createHttpServer(this.app);
 
-    this.httpsServer = createHttpsServer(options, this.app);
-
-    this.io = new SocketIOServer(this.httpsServer, {
+    // Initialize Socket.IO with the HTTP server
+    this.io = new SocketIOServer(this.httpServer, {
       cors: {
         origin: ["http://localhost:3001"],
         methods: ["GET", "POST"],
@@ -60,6 +53,20 @@ export class Server {
       },
     });
   }
+
+      // const key = fs.readFileSync("./src/config/cert.key");
+    // const cert = fs.readFileSync("./src/config/cert.crt");
+    // const options = { key, cert };
+
+    // this.httpsServer = createHttpsServer(options, this.app);
+
+    // this.io = new SocketIOServer(this.httpsServer, {
+    //   cors: {
+    //     origin: ["http://localhost:3001"],
+    //     methods: ["GET", "POST"],
+    //     credentials: true,
+    //   },
+    // });
 
   public async start(): Promise<void> {
     console.log(`API Prefix: ${this.apiPrefix}`);
@@ -108,10 +115,11 @@ export class Server {
 
     this.app.get("/", (req: Request, res: Response) => {
       res.status(HttpCode.OK).send({
-        message: `Welcome to Initial API! Endpoints available at https://localhost:${this.port}/`,
+        message: `Welcome to Initial API! Endpoints available at http://localhost:${this.port}/`,
       });
     });
 
+    // Handle socket connections
     this.io.on("connection", (socket: Socket) => {
       console.log(`New client connected: ${socket.id}`);
       socket.on("disconnect", () => {
@@ -119,8 +127,9 @@ export class Server {
       });
     });
 
-    this.httpsServer.listen(this.port, () => {
-      console.log(`HTTPS Server running on port ${this.port}...`);
+    // Start HTTP server
+    this.httpServer.listen(this.port, () => {
+      console.log(`HTTP Server running on port ${this.port}...`);
     });
   }
 
