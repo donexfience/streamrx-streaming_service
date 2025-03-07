@@ -216,8 +216,10 @@ export class SocketService {
       // Join Room
       socket.on(
         "joinRoom",
-        async ({ roomId, userId, guestId, guestName }, callback) => {   
+        async ({ roomId, userId, guestId, guestName }, callback) => {
           const permission = await this.canUserJoinRoom(userId, roomId, socket);
+          const user = await this.getUserById.execute(userId);
+          console.log(user, "user in join room");
           if (!permission) {
             socket.emit("error", { message: "Permission denied" });
             return;
@@ -244,7 +246,10 @@ export class SocketService {
             !room.participants.has(userId)
           ) {
             room.hostSocketId = socket.id;
-            room.participants.set(userId, { name: "Host", role: "host" });
+            room.participants.set(userId, {
+              name: user?.username || "Host",
+              role: "host",
+            });
           }
 
           const producers = Array.from(room.producers.entries()).map(
@@ -365,50 +370,49 @@ export class SocketService {
         "produce",
         async ({ transportId, kind, rtpParameters, roomId }, callback) => {
           const room = this.rooms.get(roomId);
-          if (!room) return callback({ error: "Room not found" });
+          if (!room) return callback?.({ error: "Room not found" });
           const transport = room.transports.get(transportId);
-          if (!transport) return callback({ error: "Transport not found" });
+          if (!transport) return callback?.({ error: "Transport not found" });
 
-          const producer = await transport.produce({ kind, rtpParameters });
-          console.log(producer, "producer created");
-          producer.appData = { userId: socket.data.userId };
-          console.log(socket.data.userId, "socket data user id");
-          room.producers.set(producer.id, producer);
-          this.io.to(roomId).emit("newProducer", {
-            producerId: producer.id,
-            userId: socket.data.userId,
-          });
-          callback({ id: producer.id });
+          try {
+            const producer = await transport.produce({ kind, rtpParameters });
+            room.producers.set(producer.id, producer);
+            room.producers.forEach((p:any) =>
+              console.log(`Existing producer SSRC: ${p.rtpParameters?.encodings[0]?.ssrc}`)
+            );
+            this.io.to(roomId).emit("newProducer", { producerId: producer.id });
+            if (typeof callback === "function") callback({ id: producer.id });
+          } catch (error: any) {
+            console.error("Error producing:", error);
+            if (typeof callback === "function")
+              callback({ error: error.message });
+          }
         }
       );
 
-      socket.on("createConsumerTransport", async (_, callback) => {
+      socket.on("createProducerTransport", (_, callback) => {
         const roomId = Array.from(socket.rooms)[1];
         const room = this.rooms.get(roomId);
         if (!room) return callback({ error: "Room not found" });
 
-        const { transport, clientTransportParams } =
-          await createWebRtcTransportBothKinds(room.router);
-        transport.appData = { userId: socket.data.userId };
-        room.transports.set(transport.id, transport);
-        console.log(
-          "transport created",
-          transport.id,
-          "consumer transport created"
-        );
-        transport.on("dtlsstatechange", (dtlsState) => {
-          if (dtlsState === "closed") {
-            room.consumers.forEach((consumer: any, consumerId: any) => {
-              if (consumer.transport === transport) {
-                consumer.close();
-                room.consumers.delete(consumerId);
+        createWebRtcTransportBothKinds(room.router).then(
+          ({ transport, clientTransportParams }) => {
+            room.transports.set(transport.id, transport);
+            transport.on("dtlsstatechange", (dtlsState) => {
+              if (dtlsState === "closed") {
+                room.producers.forEach((producer: any) => {
+                  if (producer.transport === transport) {
+                    producer.close();
+                    room.producers.delete(producer.id);
+                  }
+                });
+                transport.close();
+                room.transports.delete(transport.id);
               }
             });
-            transport.close();
-            room.transports.delete(transport.id);
+            callback(clientTransportParams);
           }
-        });
-        callback(clientTransportParams);
+        );
       });
       socket.on(
         "connectConsumerTransport",
@@ -503,7 +507,7 @@ export class SocketService {
         console.log(
           `Emitting joinRequest to host ${room.hostSocketId} for guest ${userId}`
         );
-        this.io.to(room.hostSocketId).emit("joinRequest", {
+        this.io.in(room.hostSocketId).emit("joinRequest", {
           guestId: userId,
           guestSocketId: socket.id,
         });
@@ -647,6 +651,55 @@ export class SocketService {
         }
       });
 
+      //to close the producer to prevent ssrc
+
+      socket.on("closeProducer", ({ producerId, roomId }, callback) => {
+        console.log(`Closing producer ${producerId} for room ${roomId}`);
+        const room = this.rooms.get(roomId);
+        if (!room) {
+          console.error(`Room ${roomId} not found`);
+          return callback({ success: false, error: "Room not found" });
+        }
+
+        const producer = room.producers.get(producerId);
+        if (producer) {
+          try {
+            producer.close();
+            room.producers.delete(producerId);
+            console.log(
+              `Producer ${producerId} closed and removed from room ${roomId}`
+            );
+            this.io
+              .to(roomId)
+              .emit("producerClosed", { producerIds: [producerId] });
+            callback({ success: true });
+          } catch (error) {
+            console.error(`Error closing producer ${producerId}:`, error);
+            callback({ success: false, error: "Failed to close producer" });
+          }
+        } else {
+          console.warn(`Producer ${producerId} not found in room ${roomId}`);
+          callback({ success: false, error: "Producer not found" });
+        }
+      });
+
+      socket.on("producerClosed", ({ producerId, roomId }) => {
+        console.log(
+          `Producer closed event received for ${producerId} in room ${roomId}`
+        );
+        const room = this.rooms.get(roomId);
+        if (!room) return;
+
+        const producer = room.producers.get(producerId);
+        if (producer) {
+          producer.close();
+          room.producers.delete(producerId);
+          this.io
+            .to(roomId)
+            .emit("producerClosed", { producerIds: [producerId] });
+        }
+      });
+
       // Disconnect
       socket.on("disconnect", () => {
         const roomId = Array.from(socket.rooms)[1];
@@ -654,16 +707,13 @@ export class SocketService {
         const room = this.rooms.get(roomId);
         if (!room) return;
 
-        if (room.hostId === socket.data.userId && room.isLive) {
-          room.hostSocketId = null;
-          this.io.to(roomId).emit("streamerLeft", { roomId });
-          room.isLive = false;
-        } else if (socket.data.role === "guest") {
-          room.participants.delete(socket.data.userId);
-          room.allowedGuests.delete(socket.data.userId);
+        const userId = socket.data.userId;
+        if (userId) {
+          room.participants.delete(userId);
+          room.allowedGuests.delete(userId);
           const closedProducerIds: string[] = [];
           room.producers.forEach((producer, producerId) => {
-            if (producer.appData.userId === socket.data.userId) {
+            if (producer.appData.userId === userId) {
               producer.close();
               room.producers.delete(producerId);
               closedProducerIds.push(producerId);
@@ -672,9 +722,7 @@ export class SocketService {
           this.io
             .to(roomId)
             .emit("producerClosed", { producerIds: closedProducerIds });
-          this.io
-            .to(roomId)
-            .emit("guestRemoved", { guestId: socket.data.userId });
+          this.io.to(roomId).emit("guestRemoved", { guestId: userId });
           this.io.to(roomId).emit(
             "participantsUpdated",
             Array.from(room.participants.entries()).map(([userId, data]) => ({
@@ -682,6 +730,12 @@ export class SocketService {
               ...data,
             }))
           );
+
+          if (room.hostId === userId) {
+            room.hostSocketId = null;
+            room.isLive = false;
+            this.io.to(roomId).emit("streamerLeft", { roomId });
+          }
         }
       });
     });
