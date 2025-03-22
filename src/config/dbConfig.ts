@@ -5,6 +5,7 @@ import { ChannelModel } from "../infrastructure/models/channel";
 import { ChannelSubscriptionModel } from "../infrastructure/models/subscription";
 import { StreamModel } from "../infrastructure/models/command/stream";
 import { InviteModel } from "../infrastructure/models/invite";
+import { FriendModel } from "../infrastructure/models/friend";
 
 export const AppDataSource = new DataSource({
   type: "postgres",
@@ -21,6 +22,7 @@ export const AppDataSource = new DataSource({
     ChannelSubscriptionModel,
     StreamModel,
     InviteModel,
+    FriendModel
   ],
   migrations: [],
   subscribers: [],

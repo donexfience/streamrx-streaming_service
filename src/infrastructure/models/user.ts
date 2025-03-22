@@ -4,7 +4,9 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
+  OneToMany,
 } from "typeorm";
+import { FriendModel } from "./friend";
 
 @Entity("users")
 export class UserModel {
@@ -43,4 +45,11 @@ export class UserModel {
 
   @UpdateDateColumn()
   updatedAt: Date;
+
+
+  @OneToMany(() => FriendModel, (friend) => friend.user)
+  sentFriendRequests: FriendModel[];
+
+  @OneToMany(() => FriendModel, (friend) => friend.friend)
+  receivedFriendRequests: FriendModel[];
 }

@@ -18,6 +18,14 @@ import { ChannelSubscriptionRepository } from "./infrastructure/repositories/cha
 import { GetUserById } from "./application/usecases/user/GetuserById";
 import { UserRepository } from "./infrastructure/repositories/userRepostiory";
 import { InviteRepository } from "./infrastructure/repositories/inviteRepository";
+import { StreamServiceConsumer } from "./infrastructure/rabbitmq/consumer";
+import { CreateUser } from "./application/usecases/user/createUser";
+import { UpdateUser } from "./application/usecases/user/updateUser";
+import { SubscribeToChannel } from "./application/usecases/subscriptions/subscribeChannelUsecase";
+import { UnsubscribeFromChannel } from "./application/usecases/subscriptions/unSubscribeChannelUsecase";
+import { CreateChannel } from "./application/usecases/channel/CreateChannelUsecase";
+import { EditChannel } from "./application/usecases/channel/EditChannelUsecase";
+import { UpdateUserRole } from "./application/usecases/user/update-user-role";
 
 interface ServerOptions {
   port: number;
@@ -54,19 +62,19 @@ export class Server {
     });
   }
 
-      // const key = fs.readFileSync("./src/config/cert.key");
-    // const cert = fs.readFileSync("./src/config/cert.crt");
-    // const options = { key, cert };
+  // const key = fs.readFileSync("./src/config/cert.key");
+  // const cert = fs.readFileSync("./src/config/cert.crt");
+  // const options = { key, cert };
 
-    // this.httpsServer = createHttpsServer(options, this.app);
+  // this.httpsServer = createHttpsServer(options, this.app);
 
-    // this.io = new SocketIOServer(this.httpsServer, {
-    //   cors: {
-    //     origin: ["http://localhost:3001"],
-    //     methods: ["GET", "POST"],
-    //     credentials: true,
-    //   },
-    // });
+  // this.io = new SocketIOServer(this.httpsServer, {
+  //   cors: {
+  //     origin: ["http://localhost:3001"],
+  //     methods: ["GET", "POST"],
+  //     credentials: true,
+  //   },
+  // });
 
   public async start(): Promise<void> {
     console.log(`API Prefix: ${this.apiPrefix}`);
@@ -75,6 +83,37 @@ export class Server {
     await this.initializeServices();
     const streamSyncConsumer = new StreamSyncConsumer();
     await streamSyncConsumer.start();
+    const userRepository = new UserRepository();
+    const createUser = new CreateUser(userRepository);
+    const updateUser = new UpdateUser(userRepository);
+    const subscriptionRepository = new ChannelSubscriptionRepository();
+    const channelRepository = new ChannelRepository();
+    const subscribeChannelUseCase = new SubscribeToChannel(
+      subscriptionRepository,
+      channelRepository
+    );
+    const unSubscribechannelUseCase = new UnsubscribeFromChannel(
+      subscriptionRepository,
+      channelRepository
+    );
+    const createChannelUsecase = new CreateChannel(
+      channelRepository,
+      userRepository
+    );
+
+    const channelEditUseCase = new EditChannel(channelRepository);
+    const updateUserRole = new UpdateUserRole(userRepository);
+
+    const streamConsumer = new StreamServiceConsumer(
+      createUser,
+      updateUser,
+      subscribeChannelUseCase,
+      unSubscribechannelUseCase,
+      createChannelUsecase,
+      channelEditUseCase,
+      updateUserRole
+    );
+    await streamConsumer.start();
     const getLatestStreamUsecase = new GetLatestStreamUsecase(
       new StreamQueryRepository()
     );

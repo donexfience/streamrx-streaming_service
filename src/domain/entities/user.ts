@@ -1,4 +1,5 @@
 import { IUser, SocialLink } from "../interfaces/Iuser";
+import { FriendEntity } from "./FriendRequest";
 
 export class UserEntity implements IUser {
   id?: string;
@@ -13,6 +14,8 @@ export class UserEntity implements IUser {
   role: string;
   bio?: string;
   tags: string[];
+  sentFriendRequests?: FriendEntity[];
+  receivedFriendRequests?: FriendEntity[];
 
   constructor(props: {
     id?: string;
@@ -27,6 +30,8 @@ export class UserEntity implements IUser {
     role?: string;
     bio?: string;
     tags?: string[];
+    sentFriendRequests?: FriendEntity[];
+    receivedFriendRequests?: FriendEntity[];
   }) {
     this.id = props.id;
     this.username = props.username;
@@ -40,5 +45,7 @@ export class UserEntity implements IUser {
     this.role = props.role || "VIEWER";
     this.bio = props.bio;
     this.tags = props.tags || [];
+    this.sentFriendRequests = props.sentFriendRequests;
+    this.receivedFriendRequests = props.receivedFriendRequests;
   }
 }

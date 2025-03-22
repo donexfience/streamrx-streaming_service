@@ -50,7 +50,7 @@ export class StreamServiceConsumer {
         this.handleUserUpdatedMessage.bind(this)
       );
       await this.rabbitMQConsumer.consumeFromExchange(
-        "user-created",
+        "cqrs-user-crated",
         this.handleUserCreatedMessage.bind(this)
       );
 
@@ -89,25 +89,44 @@ export class StreamServiceConsumer {
   }
 
   private async handleUserCreatedMessage(msg: amqplib.ConsumeMessage | null) {
+    if (msg) {
+      console.log(
+        "message got in the user crated message of rbmq consumer without cqrs",
+        msg
+      );
+    }
     if (!msg) return;
 
     try {
-      const message = JSON.parse(msg.content.toString());
+      const message: any = JSON.parse(msg.content.toString());
+      console.log(
+        message.message,
+        "message got for user creation un the conumer of cosnumer "
+      );
       const transformedData = {
-        id: message._id,
-        email: message.email,
-        username: message.username || null,
-        phone_number: message.phone_number || null,
-        date_of_birth: message.date_of_birth || null,
-        profileImageURL: message.profileImageURL || null,
-        social_links: message.social_links || [],
-        role: message.role || "VIEWER",
-        bio: message.bio || null,
-        tags: message.tags || [],
-        createdAt: message.createdAt ? new Date(message.createdAt) : new Date(),
-        updatedAt: message.updatedAt ? new Date(message.updatedAt) : new Date(),
+        id: message.message._id,
+        email: message.message.email,
+        username: message.message.username || null,
+        phone_number: message.message.phone_number || null,
+        date_of_birth: message.message.date_of_birth || null,
+        profileImageURL: message.message.profileImageURL || null,
+        social_links: message.message.social_links || [],
+        role: message.message.role || "VIEWER",
+        bio: message.message.bio || null,
+        tags: message.message.tags || [],
+        createdAt: message.message.createdAt
+          ? new Date(message.message.createdAt)
+          : new Date(),
+        updatedAt: message.message.updatedAt
+          ? new Date(message.message.updatedAt)
+          : new Date(),
       };
-      console.log("[INFO] User Created message:", transformedData);
+
+      console.log(
+        "[INFO] User Created message in the rabbitmq consumer:",
+        transformedData
+      );
+
       await this.createUserUsecase.execute(transformedData);
     } catch (error) {
       console.error("[ERROR] Failed to handle user created message:", error);
@@ -284,6 +303,4 @@ export class StreamServiceConsumer {
       throw error;
     }
   }
-
-  
 }

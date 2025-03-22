@@ -1,4 +1,9 @@
-import { QUEUES, RabbitMQConnection, RabbitMQConsumer } from "streamrx_common";
+import {
+  QUEUES,
+  RabbitMQConnection,
+  RabbitMQConsumer,
+  RabbitMQProducer,
+} from "streamrx_common";
 import amqplib from "amqplib";
 import { StreamMongoModel } from "../../models/query/stream";
 import { UserRepository } from "../query/userRepositroy";
@@ -9,12 +14,14 @@ export class StreamSyncConsumer {
   private rabbitMQConnection: RabbitMQConnection;
   private UserRepository: UserRepository;
   private ChannelRepository: ChannelRepostiory;
+  private rabbitMQProducer: RabbitMQProducer;
 
   constructor() {
     this.rabbitMQConnection = RabbitMQConnection.getInstance();
     this.rabbitMQConsumer = new RabbitMQConsumer(this.rabbitMQConnection);
     this.ChannelRepository = new ChannelRepostiory();
     this.UserRepository = new UserRepository();
+    this.rabbitMQProducer = new RabbitMQProducer(this.rabbitMQConnection);
   }
 
   public async start() {
@@ -95,8 +102,14 @@ export class StreamSyncConsumer {
 
     try {
       const message = JSON.parse(msg.content.toString());
-      console.log("[INFO] User Created message:", message);
+      console.log("[INFO] User Created with cqu message:", message);
+
       await this.UserRepository.create(message);
+      await this.rabbitMQProducer.publishToExchange("cqrs-user-crated", "", {
+        message,
+        event: "cqrs-user-created",
+        timestamp: new Date().toISOString(),
+      });
     } catch (error) {
       console.error("[ERROR] Failed to handle user created message:", error);
       throw error;
@@ -111,7 +124,9 @@ export class StreamSyncConsumer {
     try {
       const message = JSON.parse(msg.content.toString());
       console.log("[INFO] User Updated message:", message);
-      await this.UserRepository.updateRoleByEmail(message.email, message.role);
+      await this.UserRepository.updateRoleByEmail(message.email, {
+        role: message.role,
+      });
     } catch (error) {
       console.error("[ERROR] Failed to handle user updated message:", error);
       throw error;

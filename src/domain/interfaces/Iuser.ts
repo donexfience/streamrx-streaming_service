@@ -19,4 +19,6 @@ export interface IUser {
   role?: string;
   bio?: string;
   tags?: string[];
+  sentFriendRequests?: any;
+  receivedFriendRequests?: any;
 }
