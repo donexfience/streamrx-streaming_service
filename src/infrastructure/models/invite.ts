@@ -9,6 +9,7 @@ import {
   JoinColumn,
 } from "typeorm";
 import { ChannelModel } from "./channel";
+import { UserModel } from "./user";
 
 @Entity("invites")
 export class InviteModel {
@@ -24,6 +25,13 @@ export class InviteModel {
 
   @Column({ name: "channel_id", type: "string", nullable: false })
   channelId: string;
+
+  @ManyToOne(() => UserModel, (user) => user.id, { nullable: false })
+  @JoinColumn({ name: "user_id" })
+  user: UserModel;
+
+  @Column({ name: "user_id", type: "string", nullable: false })
+  userId: string;
 
   @Column({ type: "timestamp" })
   expiresAt: Date;

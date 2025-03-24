@@ -4,6 +4,7 @@ export interface IInviteRepository {
   createInvite(
     token: string,
     channelId: string,
+    userId: string,
     expiresAt: Date
   ): Promise<InviteModel>;
 

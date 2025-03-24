@@ -28,6 +28,12 @@ const StreamSchema = new Schema({
   createdBy: { type: Schema.Types.ObjectId, ref: "User", required: true },
   createdAt: { type: Date, required: true },
   updatedAt: { type: Date, required: true },
+  participants: [
+    {
+      user: { type: Schema.Types.ObjectId, ref: "User", required: true },
+      role: { type: String, enum: ["host", "guest"], required: true },
+    },
+  ],
 });
 
 export const StreamMongoModel = mongoose.model("Stream", StreamSchema);

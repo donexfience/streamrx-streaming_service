@@ -24,9 +24,14 @@ export class StreamEntity {
   status: "pending" | "scheduled" | "started" | "stopped" | "missed";
   createdAt: Date;
   updatedAt: Date;
+  participants: {
+    userId: string; 
+    role: "host" | "guest";
+  }[];
 
   constructor(stream: Partial<StreamEntity>) {
     Object.assign(this, stream);
+    this.participants = stream.participants || [];
   }
 
   isScheduled(): boolean {

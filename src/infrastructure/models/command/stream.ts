@@ -75,12 +75,14 @@ export class StreamModel {
 
   @Column({ name: "channel_id", type: "string", nullable: false })
   channelId: string;
+
   @ManyToOne(() => UserModel, (user) => user.id, { nullable: false })
   @JoinColumn({ name: "creator_id" })
   creator: UserModel;
 
   @Column({ name: "creator_id", type: "string", nullable: false })
   createdBy: string;
+
   @Column({
     type: "varchar",
     enum: ["pending", "scheduled", "started", "stopped", "missed"],
@@ -94,4 +96,10 @@ export class StreamModel {
 
   @UpdateDateColumn({ name: "updated_at" })
   updatedAt: Date;
+
+  @Column("jsonb", { nullable: true, default: () => "'[]'" })
+  participants: {
+    userId: string; 
+    role: "host" | "guest";
+  }[];
 }

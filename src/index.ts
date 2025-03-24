@@ -26,6 +26,10 @@ import { UnsubscribeFromChannel } from "./application/usecases/subscriptions/unS
 import { CreateChannel } from "./application/usecases/channel/CreateChannelUsecase";
 import { EditChannel } from "./application/usecases/channel/EditChannelUsecase";
 import { UpdateUserRole } from "./application/usecases/user/update-user-role";
+import {
+  UpdateStreamParticipantsUsecase,
+} from "./application/usecases/stream/UpdateStreamParticpantUsecase";
+import { StreamRepository } from "./infrastructure/repositories/command/streamCommandRepository";
 
 interface ServerOptions {
   port: number;
@@ -123,6 +127,11 @@ export class Server {
     const getChannelById = new GetChannelById(new ChannelRepository());
     const getUserById = new GetUserById(new UserRepository());
     const inviteRepository = new InviteRepository();
+    const stremRepository = new StreamRepository();
+
+    const updateStreamParticipantUsecase = new UpdateStreamParticipantsUsecase(
+      stremRepository
+    );
 
     this.socketService = new SocketService(
       this.io,
@@ -130,7 +139,7 @@ export class Server {
       getSubscriptionStatus,
       getChannelById,
       getUserById,
-      inviteRepository
+      updateStreamParticipantUsecase
     );
 
     this.app.use(express.json());

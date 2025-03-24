@@ -44,10 +44,13 @@ export class StreamRepository implements IStreamRepository {
       if (!existingStream) {
         throw new Error(`Stream with id ${id} not found`);
       }
+      console.log(streamData, "udpate need dta");
       const updatedStream = this.repository.merge(existingStream, streamData);
+      console.log(updatedStream, "last udpated steram");
       updatedStream.updatedAt = new Date();
       const savedStream = await this.repository.save(updatedStream);
       const streamEntity = new StreamEntity(savedStream);
+
       await this.rabbitMQProducer.publishToExchange(
         "stream-updated",
         "",
@@ -56,6 +59,20 @@ export class StreamRepository implements IStreamRepository {
       return streamEntity;
     } catch (error) {
       console.log(error, "error in the repository of edit stream");
+      throw error;
+    }
+  }
+
+  async findById(id: string): Promise<StreamEntity> {
+    try {
+      const stream = await this.repository.findOne({
+        where: { id },
+        relations: ["channel"],
+      });
+      if (!stream) throw new Error(`Stream with id ${id} not found`);
+      return new StreamEntity(stream);
+    } catch (error) {
+      console.log(error, "error in the repository of findById stream");
       throw error;
     }
   }

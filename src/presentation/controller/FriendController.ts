@@ -1,3 +1,4 @@
+import { GetFriendOfStreamertUsecase } from "./../../application/usecases/friend/GetFriendUsecaseById";
 import { Request, Response } from "express";
 import { UserRepository } from "../../infrastructure/repositories/userRepostiory";
 import { FriendRepository } from "../../infrastructure/repositories/FriendRepository";
@@ -11,6 +12,7 @@ export class FriendController {
   private sendFriendRequestUsecase: SendFriendRequestUsecase;
   private acceptFriendRequestUsecase: AcceptFriendRequestUsecase;
   private blockFriendUsecase: BlockFriendUsecase;
+  private GetFriendOfStreamertUsecase: GetFriendOfStreamertUsecase;
 
   constructor() {
     const userRepository = new UserRepository();
@@ -27,6 +29,9 @@ export class FriendController {
       friendRepository
     );
     this.blockFriendUsecase = new BlockFriendUsecase(friendRepository);
+    this.GetFriendOfStreamertUsecase = new GetFriendOfStreamertUsecase(
+      friendRepository
+    );
   }
 
   async getStreamers(req: Request, res: Response): Promise<void> {
@@ -163,19 +168,19 @@ export class FriendController {
     try {
       const blockerId = req.params.userId;
       const blockedId = req.body.friendId;
-  
+
       if (!blockerId) {
         res.status(400).json({ message: "User ID is required" });
         return;
       }
-  
+
       if (!blockedId) {
         res.status(400).json({ message: "Blocked user ID is required" });
         return;
       }
-  
+
       const block = await this.blockFriendUsecase.execute(blockerId, blockedId);
-  
+
       if (block === null) {
         res.status(200).json({
           success: true,
@@ -190,7 +195,31 @@ export class FriendController {
     } catch (error) {
       res.status(500).json({
         success: false,
-        message: error instanceof Error ? error.message : "An unknown error occurred",
+        message:
+          error instanceof Error ? error.message : "An unknown error occurred",
+      });
+    }
+  }
+  async getFriendOfStreamer(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = req.params.userId;
+
+      if (!userId) {
+        res.status(400).json({ message: "User ID is required" });
+        return;
+      }
+
+      const user = await this.GetFriendOfStreamertUsecase.execute(userId);
+      res.status(201).json({
+        success: true,
+        user,
+        message: "friends of user fetch successfully",
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message:
+          error instanceof Error ? error.message : "An unknown error occurred",
       });
     }
   }
