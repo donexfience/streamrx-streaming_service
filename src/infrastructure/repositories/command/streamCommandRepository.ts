@@ -50,11 +50,12 @@ export class StreamRepository implements IStreamRepository {
       updatedStream.updatedAt = new Date();
       const savedStream = await this.repository.save(updatedStream);
       const streamEntity = new StreamEntity(savedStream);
+      console.log(streamEntity,savedStream,"stream after convertion with strem entity")
 
       await this.rabbitMQProducer.publishToExchange(
         "stream-updated",
         "",
-        streamEntity
+        savedStream
       );
       return streamEntity;
     } catch (error) {

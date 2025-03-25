@@ -88,10 +88,16 @@ export class StreamSyncConsumer {
     try {
       const stream = JSON.parse(msg.content.toString());
       console.log("[INFO] Stream Updated message:", stream);
-      await StreamMongoModel.updateOne({ id: stream.id }, stream, {
-        upsert: true,
-      });
-      console.log(`Stream ${stream.id} updated in MongoDB`);
+      console.log(stream?.participants, "stream participants");
+      const updtedStream = await StreamMongoModel.updateOne(
+        { id: stream.id },
+        stream,
+        {
+          upsert: true,
+        }
+      );
+
+      console.log(`Stream ${stream.id},${updtedStream}updated in MongoDB`);
     } catch (error) {
       console.error("[ERROR] Failed to handle stream updated message:", error);
       throw error;

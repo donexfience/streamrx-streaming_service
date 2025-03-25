@@ -30,7 +30,7 @@ const StreamSchema = new Schema({
   updatedAt: { type: Date, required: true },
   participants: [
     {
-      user: { type: Schema.Types.ObjectId, ref: "User", required: true },
+      userId: { type: String, required: true },
       role: { type: String, enum: ["host", "guest"], required: true },
     },
   ],

@@ -1,4 +1,3 @@
-// src/models/InviteModel.ts
 import {
   Entity,
   PrimaryGeneratedColumn,
@@ -35,6 +34,9 @@ export class InviteModel {
 
   @Column({ type: "timestamp" })
   expiresAt: Date;
+
+  @Column({ type: "boolean", default: false })
+  isApproved: boolean;
 
   @CreateDateColumn()
   createdAt: Date;

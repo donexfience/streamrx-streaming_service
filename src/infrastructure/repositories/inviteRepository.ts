@@ -33,6 +33,16 @@ export class InviteRepository implements IInviteRepository {
     });
   }
 
+
+  async updateByToken(token: string, updates: Partial<InviteModel>): Promise<InviteModel | null> {
+    const invite = await this.findByToken(token);
+    if (!invite) {
+      return null;
+    }
+    Object.assign(invite, updates);
+    return this.InviteRepository.save(invite);
+  }
+
   async deleteByToken(token: string): Promise<void> {
     console.log("delteign token");
     await this.InviteRepository.delete({

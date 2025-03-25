@@ -81,15 +81,23 @@ export class SocketService {
               const hostParticipant: any = {
                 userId: user._id || socket.id,
                 role: "host",
+                username:user.username
               };
               const updatedStream =
-                await this.updateStreamSettingsUsecase.execute(
+                await this.UpdateStreamParticipantUsecase.execute(
                   stream.id,
                   hostParticipant
                 );
+              console.log(
+                updatedStream,
+                "updated stream got in the participant"
+              );
               this.io.to(stream.id).emit("streamUpdate", updatedStream);
               this.io.to(stream.id).emit("participantJoined", hostParticipant);
             } else {
+              console.log(
+                "ggggggggggggggggguessssssssssssssssssssssssssssssssssssssssst i s sssssssssssssssssssssss joineeeeeeeeeeeeeeidng"
+              );
               socket.emit("streamUpdate", stream);
             }
           } else {
@@ -102,13 +110,34 @@ export class SocketService {
       );
 
       socket.on("verifyInvite", async (data, callback) => {
-        const { token } = data;
+        const { token,username } = data;
         try {
+          console.log(token, "token got in the verifyINvite");
           const invite = await this.InviteRepository.findByToken(token);
-          if (invite && invite.expiresAt > new Date()) {
-            callback({ success: true, roomId: invite.channelId });
-          } else {
+          if (!invite || invite.expiresAt <= new Date()) {
             callback({ success: false, message: "Invite expired or invalid" });
+            return;
+          }
+
+          const stream = await this.getLatestStreamUsecase.execute(
+            invite.channelId
+          );
+          if (!stream?.id) {
+            callback({ success: false, message: "No active stream found" });
+            return;
+          }
+
+          if (invite.isApproved) {
+            socket.join(stream.id);
+            const participant = { userId: invite.userId, role: "guest" };
+            callback({ success: true, roomId: invite.channelId, streamId: stream.id });
+            this.io.to(stream.id).emit("participantJoined", {
+              userId: invite.userId,
+              role: "guest",
+              username: username || "Guest", 
+            });
+          } else {
+            callback({ success: true, roomId: invite.channelId });
           }
         } catch (error) {
           console.error("Error verifying invite:", error);
@@ -208,28 +237,31 @@ export class SocketService {
         console.log(data, "data got in the approve guest");
         try {
           const stream = await this.getLatestStreamUsecase.execute(channelId);
-          console.log(stream,"stream got in the approveg uest")
+          console.log(stream, "stream got in the approveg uest");
           if (!stream?.id) {
             socket.emit("error", { message: "No active stream found" });
             return;
           }
-          console.log(stream.createdBy.toString(),approverId,"both id in the request josin")
+          console.log(
+            stream.createdBy.toString(),
+            approverId,
+            "both id in the request josin"
+          );
           if (stream.createdBy.toString() !== approverId) {
             socket.emit("error", {
               message: "Only the host can approve guests",
             });
             return;
           }
-          
 
           const invite = await this.InviteRepository.findByToken(token);
-          console.log(invite,"invite int eh gotrequst join")
+          console.log(invite, "invite int eh gotrequst join");
           if (
             !invite ||
             invite.expiresAt <= new Date() ||
             invite.channelId !== channelId
           ) {
-            console.log("invite worign")
+            console.log("invite worign");
             this.io
               .to(socketId)
               .emit("joinDenied", { message: "Invalid or expired invite" });
@@ -242,8 +274,10 @@ export class SocketService {
               stream.id,
               participant
             );
-          console.log(updatedStream,"updated strem response")
-          await this.InviteRepository.deleteByToken(token);
+          console.log(updatedStream, "updated strem response");
+          await this.InviteRepository.updateByToken(token, {
+            isApproved: true,
+          });
 
           this.io.to(stream.id).emit("streamUpdate", updatedStream);
           this.io.to(socketId).emit("joinApproved", { streamId: stream.id });
