@@ -27,6 +27,7 @@ export class StreamEntity {
   participants: {
     userId: string; 
     role: "host" | "guest";
+    username:string
   }[];
 
   constructor(stream: Partial<StreamEntity>) {

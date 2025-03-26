@@ -101,5 +101,6 @@ export class StreamModel {
   participants: {
     userId: string; 
     role: "host" | "guest";
+    username:string
   }[];
 }

@@ -7,7 +7,7 @@ export class UpdateStreamParticipantsUsecase {
 
   async execute(
     streamId: string,
-    participant: { userId: string; role: "host" | "guest" }
+    participant: { userId: string; role: "host" | "guest"; username: string }
   ): Promise<StreamEntity> {
     try {
       const currentStream = await this.streamRepository.edit(streamId, {});
@@ -21,7 +21,11 @@ export class UpdateStreamParticipantsUsecase {
         participants.push(participant);
       }
 
-      console.log(participant,streamId,"id and participant in the usecase upate participant")
+      console.log(
+        participant,
+        streamId,
+        "id and participant in the usecase upate participant"
+      );
 
       const updatedStream = await this.streamRepository.edit(streamId, {
         participants,

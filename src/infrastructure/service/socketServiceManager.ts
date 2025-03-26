@@ -51,6 +51,14 @@ export class SocketService {
     this.initializeSocketEvents();
   }
 
+  // Add this method to check participant count
+  private async canAddParticipant(streamId: string): Promise<boolean> {
+    const stream = await this.getLatestStreamUsecase.execute(streamId);
+    const participants = stream?.participants || [];
+    const guestCount = participants.filter((p) => p.role === "guest").length;
+    return guestCount < 6;
+  }
+
   private initializeSocketEvents() {
     this.io.on("connection", (socket: Socket) => {
       console.log("A user connected:", socket.id);
@@ -81,7 +89,7 @@ export class SocketService {
               const hostParticipant: any = {
                 userId: user._id || socket.id,
                 role: "host",
-                username:user.username
+                username: user.username,
               };
               const updatedStream =
                 await this.UpdateStreamParticipantUsecase.execute(
@@ -110,7 +118,7 @@ export class SocketService {
       );
 
       socket.on("verifyInvite", async (data, callback) => {
-        const { token,username } = data;
+        const { token, username } = data;
         try {
           console.log(token, "token got in the verifyINvite");
           const invite = await this.InviteRepository.findByToken(token);
@@ -130,11 +138,15 @@ export class SocketService {
           if (invite.isApproved) {
             socket.join(stream.id);
             const participant = { userId: invite.userId, role: "guest" };
-            callback({ success: true, roomId: invite.channelId, streamId: stream.id });
+            callback({
+              success: true,
+              roomId: invite.channelId,
+              streamId: stream.id,
+            });
             this.io.to(stream.id).emit("participantJoined", {
               userId: invite.userId,
               role: "guest",
-              username: username || "Guest", 
+              username: username || "Guest",
             });
           } else {
             callback({ success: true, roomId: invite.channelId });
@@ -242,6 +254,13 @@ export class SocketService {
             socket.emit("error", { message: "No active stream found" });
             return;
           }
+
+          if (!(await this.canAddParticipant(channelId))) {
+            this.io.to(socketId).emit("joinDenied", {
+              message: "Maximum guest limit (6) reached",
+            });
+            return;
+          }
           console.log(
             stream.createdBy.toString(),
             approverId,
@@ -268,7 +287,11 @@ export class SocketService {
             return;
           }
 
-          const participant: any = { userId: invite.userId, role: "guest" };
+          const participant: any = {
+            userId: invite.userId,
+            role: "guest",
+            username: username,
+          };
           const updatedStream =
             await this.UpdateStreamParticipantUsecase.execute(
               stream.id,
