@@ -15,6 +15,21 @@ import { CreateStreamSettingsUsecase } from "../../application/usecases/streamSe
 import { createInviteUsecase } from "../../application/usecases/invite/createInviteUsecase";
 import { StreamRepository } from "../repositories/command/streamCommandRepository";
 import { UpdateStreamParticipantsUsecase } from "../../application/usecases/stream/UpdateStreamParticpantUsecase";
+import * as mediasoup from "mediasoup";
+import {
+  Worker,
+  Router,
+  WebRtcTransport,
+  Producer,
+  Consumer,
+} from "mediasoup/node/lib/types";
+
+interface CustomSocket extends Socket {
+  producerIds?: string[]; // Array of producer IDs
+  streamId?: string; // Stream ID
+  transports?: { send: string; recv: string };
+  userId?: string; // User ID
+}
 
 export class SocketService {
   private streamSettingsRepository: StreamSettingsRepository;
@@ -23,6 +38,12 @@ export class SocketService {
   private updateStreamSettingsUsecase: UpdateStreamSettingsUsecase;
   private createStreamSettingsUsecase: CreateStreamSettingsUsecase;
   private InviteRepository: InviteRepository;
+
+  private worker: Worker;
+  private routers: Map<string, Router> = new Map();
+  private transports: Map<string, WebRtcTransport> = new Map();
+  private producers: Map<string, Producer> = new Map();
+  private consumers: Map<string, Consumer> = new Map();
 
   constructor(
     private io: SocketIOServer,
@@ -48,7 +69,18 @@ export class SocketService {
     );
     this.InviteRepository = new InviteRepository();
 
-    this.initializeSocketEvents();
+    this.initializeMediasoup().then(() => {
+      this.initializeSocketEvents();
+    });
+  }
+
+  private async initializeMediasoup() {
+    this.worker = await mediasoup.createWorker({
+      logLevel: "warn",
+      rtcMinPort: 10000,
+      rtcMaxPort: 10100,
+    });
+    console.log("Mediasoup worker created");
   }
 
   // Add this method to check participant count
@@ -60,7 +92,7 @@ export class SocketService {
   }
 
   private initializeSocketEvents() {
-    this.io.on("connection", (socket: Socket) => {
+    this.io.on("connection", (socket: CustomSocket) => {
       console.log("A user connected:", socket.id);
 
       socket.on("generateInvite", async (data) => {
@@ -86,8 +118,35 @@ export class SocketService {
             console.log("Socket joined room", stream.id);
 
             if (role === "host") {
+              if (!this.routers.has(stream.id)) {
+                const router = await this.worker.createRouter({
+                  mediaCodecs: [
+                    {
+                      kind: "audio",
+                      mimeType: "audio/opus",
+                      clockRate: 48000,
+                      channels: 2,
+                    },
+                    { kind: "video", mimeType: "video/VP8", clockRate: 90000 },
+                    {
+                      kind: "video",
+                      mimeType: "video/H264",
+                      clockRate: 90000,
+                      parameters: {
+                        "packetization-mode": 1,
+                        "profile-level-id": "42e01f",
+                        "level-asymmetry-allowed": 1,
+                      },
+                    },
+                  ],
+                });
+                this.routers.set(stream.id, router);
+                socket.streamId = stream.id;
+                socket.userId = user._id;
+                console.log(`Router created for stream ${stream.id}`);
+              }
               const hostParticipant: any = {
-                userId: user._id || socket.id,
+                userId: user._id,
                 role: "host",
                 username: user.username,
               };
@@ -103,11 +162,30 @@ export class SocketService {
               this.io.to(stream.id).emit("streamUpdate", updatedStream);
               this.io.to(stream.id).emit("participantJoined", hostParticipant);
             } else {
+              socket.streamId = stream.id;
+              socket.userId = user._id;
               console.log(
                 "ggggggggggggggggguessssssssssssssssssssssssssssssssssssssssst i s sssssssssssssssssssssss joineeeeeeeeeeeeeeidng"
               );
               socket.emit("streamUpdate", stream);
             }
+
+            // Send existing producers to the new participant
+            const existingProducers = Array.from(this.producers.values())
+              .filter(
+                (p) =>
+                  p.appData.streamId === stream.id &&
+                  p.appData.userId !== socket.userId
+              )
+              .map((p) => ({
+                producerId: p.id,
+                producerUserId: p.appData.userId,
+              }));
+            socket.emit("existingProducers", existingProducers);
+            console.log(
+              "Sent existing producers to new participant:",
+              existingProducers
+            );
           } else {
             console.warn("No stream found for channel:", channelData._id);
             socket.emit("error", {
@@ -116,6 +194,227 @@ export class SocketService {
           }
         }
       );
+
+      socket.on("getMediasoupConfig", async (callback) => {
+        const streamId = socket.streamId;
+
+        if (!streamId) return callback({ error: "Not joined to any stream" });
+        const router = this.routers.get(streamId);
+        if (!router)
+          return callback({ error: "Router not found for this stream" });
+        callback({ routerRtpCapabilities: router.rtpCapabilities });
+      });
+
+      socket.on(
+        "createTransport",
+        async (
+          direction: "send" | "recv",
+          callback: (transportOptions: any) => void
+        ) => {
+          const streamId = socket.streamId;
+          if (!streamId) return callback({ error: "Not joined to any stream" });
+          const router = this.routers.get(streamId);
+          if (!router)
+            return callback({ error: "Router not found for this stream" });
+
+          try {
+            const transport = await router.createWebRtcTransport({
+              listenIps: [{ ip: "0.0.0.0", announcedIp: "127.0.0.1" }],
+              enableUdp: true,
+              enableTcp: true,
+              preferUdp: true,
+              initialAvailableOutgoingBitrate: 1000000,
+            });
+
+            this.transports.set(transport.id, transport);
+            socket.transports = socket.transports || { send: "", recv: "" };
+            socket.transports[direction] = transport.id;
+
+            callback({
+              id: transport.id,
+              iceParameters: transport.iceParameters,
+              iceCandidates: transport.iceCandidates,
+              dtlsParameters: transport.dtlsParameters,
+            });
+
+            transport.on("routerclose", () => {
+              transport.close();
+              this.transports.delete(transport.id);
+            });
+          } catch (error) {
+            console.error("Error creating transport:", error);
+            callback({ error: "Failed to create transport" });
+          }
+        }
+      );
+
+      socket.on(
+        "connectTransport",
+        async ({ transportId, dtlsParameters }, callback) => {
+          const transport = this.transports.get(transportId);
+          if (!transport) return callback({ error: "Transport not found" });
+
+          try {
+            await transport.connect({ dtlsParameters });
+            callback({});
+          } catch (error) {
+            console.error("Error connecting transport:", error);
+            callback({ error: "Failed to connect transport" });
+          }
+        }
+      );
+      socket.on(
+        "produce",
+        async ({ transportId, kind, rtpParameters, appData }, callback) => {
+          const transport = this.transports.get(transportId);
+          console.log("transport inside the produce", transport);
+          if (!transport) return callback({ error: "Transport not found" });
+
+          try {
+            const producer = await transport.produce({
+              kind,
+              rtpParameters,
+              appData: {
+                ...appData,
+                userId: socket.userId,
+                streamId: socket.streamId,
+              },
+            });
+            this.producers.set(producer.id, producer);
+            console.log("producer id", producer.id, "producer", producer);
+            socket.producerIds = socket.producerIds || [];
+            socket.producerIds.push(producer.id);
+            console.log("socket producer ids", socket.producerIds);
+
+            const streamId = socket.streamId;
+            if (streamId && socket.userId) {
+              this.io.to(streamId).emit("newProducer", {
+                producerId: producer.id,
+                producerUserId: socket.userId,
+              });
+            }
+            console.log(
+              "producer id in the callback",
+              producer.id,
+              socket.streamId
+            );
+            callback({ id: producer.id });
+
+            producer.on("transportclose", () => {
+              producer.close();
+              this.producers.delete(producer.id);
+            });
+          } catch (error) {
+            console.error("Error producing:", error);
+            callback({ error: "Failed to produce" });
+          }
+        }
+      );
+      socket.on(
+        "consume",
+        async ({ transportId, producerId, rtpCapabilities }, callback) => {
+          console.log(
+            "Received consume event with callback type:",
+            typeof callback
+          );
+          const transport = this.transports.get(transportId);
+          if (!transport) {
+            if (typeof callback === "function") {
+              callback({ error: "Transport not found" });
+            } else {
+              console.warn("No callback provided, skipping response");
+            }
+            return;
+          }
+          const router = this.routers.get(socket.streamId!);
+          if (!router) {
+            if (typeof callback === "function") {
+              callback({ error: "Router not found" });
+            }
+            return;
+          }
+
+          const producer = this.producers.get(producerId);
+          if (!producer) {
+            if (typeof callback === "function") {
+              callback({ error: "Producer not found" });
+            }
+            return;
+          }
+
+          if (!router.canConsume({ producerId, rtpCapabilities })) {
+            if (typeof callback === "function") {
+              callback({ error: "Cannot consume this producer" });
+            }
+            return;
+          }
+
+          try {
+            const consumer = await transport.consume({
+              producerId,
+              rtpCapabilities,
+              paused: true,
+              appData: producer.appData,
+            });
+            console.log(consumer, "consumer got in the consume");
+            this.consumers.set(consumer.id, consumer);
+
+            const response = {
+              id: consumer.id,
+              producerId,
+              kind: consumer.kind,
+              rtpParameters: consumer.rtpParameters,
+              appData: consumer.appData,
+            };
+
+            console.log(response, "response in the consume");
+
+            if (typeof callback === "function") {
+              callback(response);
+            } else {
+              console.warn("No callback provided for consume response");
+            }
+
+            consumer.on("producerclose", () => {
+              consumer.close();
+              this.consumers.delete(consumer.id);
+              socket.emit("producerClosed", { producerId });
+            });
+          } catch (error) {
+            console.error("Error consuming:", error);
+            if (typeof callback === "function") {
+              callback({ error: "Failed to consume" });
+            }
+          }
+        }
+      );
+
+      socket.on("resumeConsumer", async (consumerId, callback) => {
+        const consumer = this.consumers.get(consumerId);
+        if (consumer) {
+          try {
+            await consumer.resume();
+            console.log(`Consumer ${consumerId} resumed successfully`);
+            callback({ success: true });
+          } catch (error: any) {
+            console.error(`Error resuming consumer ${consumerId}:`, error);
+            callback({ success: false, error: error.message });
+          }
+        } else {
+          console.warn(`Consumer ${consumerId} not found`);
+          callback({ success: false, error: "Consumer not found" });
+        }
+      });
+      socket.on("closeProducer", async ({ producerId }) => {
+        const producer = this.producers.get(producerId);
+        if (producer) {
+          producer.close();
+          this.producers.delete(producerId);
+          if (socket.streamId) {
+            this.io.to(socket.streamId).emit("producerClosed", { producerId });
+          }
+        }
+      });
 
       socket.on("verifyInvite", async (data, callback) => {
         const { token, username } = data;
