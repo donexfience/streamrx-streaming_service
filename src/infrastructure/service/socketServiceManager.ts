@@ -163,6 +163,7 @@ export class SocketService {
   // Helper to check if user is already in room by userId (not socketId)
   private isUserAlreadyInRoom(streamId: string, userId: string): boolean {
     const room = this.rooms.get(streamId);
+    console.log(room, "room in the isUserAlreadyInRoom functionnnnnnn");
     if (!room) return false;
 
     return room.participants.has(userId);
@@ -295,12 +296,13 @@ export class SocketService {
     socketId: string,
     role: string,
     username: string
-  ): ParticipantData {
+  ): { participantData: ParticipantData; isNew: boolean } {
     if (!this.rooms.has(streamId)) {
       this.rooms.set(streamId, { participants: new Map() });
     }
 
     const room = this.rooms.get(streamId)!;
+    let isNew = false;
 
     // Check if user already exists in the room
     const existingParticipant = room.participants.get(userId);
@@ -310,8 +312,9 @@ export class SocketService {
         `Updating existing participant ${userId} with new socket ${socketId}`
       );
       existingParticipant.socketId = socketId;
+      existingParticipant.username = username;
       this.userSocketMap.set(userId, socketId);
-      return existingParticipant;
+      return { participantData: existingParticipant, isNew: false };
     }
 
     // Create new participant
@@ -329,32 +332,34 @@ export class SocketService {
     room.participants.set(userId, participantData);
     this.userSocketMap.set(userId, socketId);
 
-    return participantData;
+    return { participantData, isNew: true };
   }
-
   // Helper to send list of current participants to a socket
   private sendCurrentParticipants(
     socket: CustomSocket,
     streamId: string
   ): void {
     const room = this.rooms.get(streamId);
+    console.log(room, "room in the sendCurrentParticipants functionnnnnnn");
     if (!room) return;
 
     room.participants.forEach((participantData) => {
-      if (participantData.socketId !== socket.id) {
-        socket.emit("participantJoined", {
-          socketId: participantData.socketId,
-          userId: participantData.userId,
-          role: participantData.role,
-          username: participantData.username,
-        });
-      }
+      console.log(
+        `Sending current using helper participant data to ${socket.id}: ${participantData.username} role: ${participantData.role}`
+      );
+      socket.emit("participantJoined", {
+        socketId: participantData.socketId,
+        userId: participantData.userId,
+        role: participantData.role,
+        username: participantData.username,
+      });
     });
   }
 
   // Helper to send existing producers to a socket
   private sendExistingProducers(socket: CustomSocket, streamId: string): void {
     const room = this.rooms.get(streamId);
+    console.log(room, "room in the sendExistingProducers functionnnnnnn");
     if (!room) return;
 
     room.participants.forEach((participantData) => {
@@ -363,6 +368,9 @@ export class SocketService {
         participantData.producerIds.length > 0
       ) {
         participantData.producerIds.forEach((producerId) => {
+          console.log(
+            `Sending existing producer ${producerId} to ${socket.id}, role: ${participantData.role} username: ${participantData.username}`
+          );
           socket.emit("newProducer", {
             producerId,
             producerSocketId: participantData.socketId,
@@ -448,6 +456,21 @@ export class SocketService {
       const customSocket = socket as CustomSocket;
       console.log("A user connected:", socket.id);
 
+      socket.onAny((event, ...args) => {
+        console.log(
+          `Event got here check here for more detials: ${event}, Args: ${JSON.stringify(
+            args
+          )}`
+        );
+      });
+
+      // Monkey-patch emit to debug sent events
+      const originalEmit = socket.emit;
+      socket.emit = function (event, ...args) {
+        console.log(` Event sent here for more details: "${event}"`, ...args);
+        return originalEmit.call(this, event, ...args);
+      };
+
       /** Generate invite link */
       socket.on("generateInvite", async (data) => {
         const { channelId, userId } = data;
@@ -482,7 +505,7 @@ export class SocketService {
           customSocket.userId = user._id;
 
           // Add to participants with proper user tracking
-          const participantData = this.addParticipantToRoom(
+          const { participantData, isNew } = this.addParticipantToRoom(
             stream.id,
             user._id,
             socket.id,
@@ -518,6 +541,14 @@ export class SocketService {
             });
           } else {
             socket.emit("streamUpdate", stream);
+            if (isNew) {
+              this.io.to(stream.id).emit("participantJoined", {
+                socketId: socket.id,
+                userId: user._id,
+                role: role,
+                username: user.username,
+              });
+            }
           }
 
           // Send existing participants and producers
@@ -531,6 +562,16 @@ export class SocketService {
         const { token, username } = data;
         try {
           const invite = await this.InviteRepository.findByToken(token);
+          let user;
+          if (invite?.userId) {
+            user = await this.getUserByIdUsecase.execute(invite.userId);
+          }
+          console.log(user, "user in the verify invite functionnnnnnnn");
+          if (!user) {
+            callback({ success: false, message: "User not found" });
+            return;
+          }
+
           if (!invite || invite.expiresAt <= new Date()) {
             callback({ success: false, message: "Invite expired or invalid" });
             return;
@@ -587,6 +628,11 @@ export class SocketService {
               socket.join(stream.id);
               customSocket.roomId = stream.id;
               customSocket.userId = invite.userId;
+              const backendusername = user?.username;
+              let newUsername;
+              if (username == "") {
+                newUsername = backendusername;
+              }
 
               // Add user to room
               this.addParticipantToRoom(
@@ -594,7 +640,7 @@ export class SocketService {
                 invite.userId,
                 socket.id,
                 "guest",
-                username || "Guest"
+                username || backendusername
               );
 
               socket.emit("routerRtpCapabilities", this.router.rtpCapabilities);
@@ -695,6 +741,10 @@ export class SocketService {
           const guestSocket = this.io.sockets.sockets.get(
             socketId
           ) as CustomSocket;
+
+          console.log(
+            `Guest socket found: ${guestSocket?.id}, socket :${guestSocket}`
+          );
           if (!guestSocket) {
             socket.emit("error", { message: "Guest is no longer connected" });
             return;
