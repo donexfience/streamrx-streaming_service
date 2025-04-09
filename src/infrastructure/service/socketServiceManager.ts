@@ -15,20 +15,24 @@ import { CreateStreamSettingsUsecase } from "../../application/usecases/streamSe
 import { createInviteUsecase } from "../../application/usecases/invite/createInviteUsecase";
 import { StreamRepository } from "../repositories/command/streamCommandRepository";
 import { UpdateStreamParticipantsUsecase } from "../../application/usecases/stream/UpdateStreamParticpantUsecase";
-import * as mediasoup from "mediasoup";
-import {
-  Worker,
-  Router,
-  WebRtcTransport,
-  Producer,
-  Consumer,
-} from "mediasoup/node/lib/types";
 
-interface CustomSocket extends Socket {
-  producerIds?: string[]; // Array of producer IDs
-  streamId?: string; // Stream ID
-  transports?: { send: string; recv: string };
-  userId?: string; // User ID
+interface Producer {
+  id: string;
+  kind: string;
+  userId: string;
+  appData: any;
+}
+
+interface Participant {
+  userId: string;
+  role: "host" | "guest";
+  username: string;
+  sendTransport?: mediasoupTypes.WebRtcTransport;
+  receiveTransport?: mediasoupTypes.WebRtcTransport;
+  producers: mediasoupTypes.Producer[];
+  consumers: mediasoupTypes.Consumer[];
+  cameraOn?: boolean;
+  micOn?: boolean;
 }
 
 export class SocketService {
@@ -37,13 +41,16 @@ export class SocketService {
   private getStreamSettingsUsecase: GetStreamSettingsUsecase;
   private updateStreamSettingsUsecase: UpdateStreamSettingsUsecase;
   private createStreamSettingsUsecase: CreateStreamSettingsUsecase;
-  private InviteRepository: InviteRepository;
+  private inviteRepository: InviteRepository;
 
-  private worker: Worker;
-  private routers: Map<string, Router> = new Map();
-  private transports: Map<string, WebRtcTransport> = new Map();
-  private producers: Map<string, Producer> = new Map();
-  private consumers: Map<string, Consumer> = new Map();
+  private participants: {
+    [streamId: string]: { [socketId: string]: Participant };
+  } = {};
+  private socketToStream: { [socketId: string]: string } = {};
+  private routers: { [streamId: string]: mediasoupTypes.Router } = {};
+  private streamProducers: { [streamId: string]: Producer[] } = {};
+  private workers: mediasoupTypes.Worker[] = [];
+  private workerIndex = 0;
 
   constructor(
     private io: SocketIOServer,
@@ -51,7 +58,7 @@ export class SocketService {
     private getSubscriptionStatusUsecase: GetSubscriptionStatus,
     private getChannelByIdUsecase: GetChannelById,
     private getUserByIdUsecase: GetUserById,
-    private UpdateStreamParticipantUsecase: UpdateStreamParticipantsUsecase
+    private updateStreamParticipantUsecase: UpdateStreamParticipantsUsecase
   ) {
     this.streamSettingsRepository = new StreamSettingsRepository();
     this.streamRepository = new StreamRepository();
@@ -64,365 +71,258 @@ export class SocketService {
     this.createStreamSettingsUsecase = new CreateStreamSettingsUsecase(
       this.streamSettingsRepository
     );
-    this.UpdateStreamParticipantUsecase = new UpdateStreamParticipantsUsecase(
-      this.streamRepository
-    );
-    this.InviteRepository = new InviteRepository();
+    this.inviteRepository = new InviteRepository();
 
-    this.initializeMediasoup().then(() => {
-      this.initializeSocketEvents();
-    });
+    this.initializeWorker();
+    this.initializeSocketEvents();
   }
 
-  private async initializeMediasoup() {
-    this.worker = await mediasoup.createWorker({
-      logLevel: "warn",
-      rtcMinPort: 10000,
-      rtcMaxPort: 10100,
-    });
-    console.log("Mediasoup worker created");
+  private async initializeWorker() {
+    try {
+      this.workers = await createWorkers();
+      console.log(`Initialized ${this.workers.length} mediasoup workers`);
+    } catch (error) {
+      console.error("Failed to initialize mediasoup workers:", error);
+    }
   }
 
-  // Add this method to check participant count
+  private getNextWorker(): mediasoupTypes.Worker {
+    const worker = this.workers[this.workerIndex];
+    this.workerIndex = (this.workerIndex + 1) % this.workers.length;
+    return worker;
+  }
+
+  private async createRouterIfNeeded(
+    streamId: string
+  ): Promise<mediasoupTypes.Router | null> {
+    if (!this.routers[streamId] && this.workers.length > 0) {
+      try {
+        const worker = this.getNextWorker();
+        this.routers[streamId] = await worker.createRouter({
+          mediaCodecs: [
+            {
+              kind: "audio",
+              mimeType: "audio/opus",
+              clockRate: 48000,
+              channels: 2,
+            },
+            { kind: "video", mimeType: "video/VP8", clockRate: 90000 },
+          ],
+        });
+        console.log(`Created router for stream ${streamId}`);
+        return this.routers[streamId];
+      } catch (error) {
+        console.error(`Error creating router for stream ${streamId}:`, error);
+        return null;
+      }
+    }
+    return this.routers[streamId] || null;
+  }
+
   private async canAddParticipant(streamId: string): Promise<boolean> {
-    const stream = await this.getLatestStreamUsecase.execute(streamId);
-    const participants = stream?.participants || [];
+    if (!this.participants[streamId]) return true;
+
+    const participants = Object.values(this.participants[streamId]);
     const guestCount = participants.filter((p) => p.role === "guest").length;
-    return guestCount < 6;
+    return guestCount < 6; // Maximum 6 guests
+  }
+
+  private getParticipantsList(streamId: string) {
+    if (!this.participants[streamId]) return [];
+
+    return Object.values(this.participants[streamId]).map((p) => ({
+      userId: p.userId,
+      role: p.role,
+      username: p.username,
+    }));
+  }
+
+  private broadcastStreamUpdate(streamId: string) {
+    const participantsList = this.getParticipantsList(streamId);
+    this.io.to(streamId).emit("streamUpdate", {
+      id: streamId,
+      participants: participantsList,
+    });
+  }
+
+  private sendExistingProducers(socket: Socket, streamId: string) {
+    if (!this.streamProducers[streamId]) return;
+
+    this.streamProducers[streamId].forEach((producer) => {
+      socket.emit("newProducer", {
+        producerId: producer.id,
+        userId: producer.userId,
+        kind: producer.kind,
+        appData: producer.appData,
+      });
+    });
+  }
+
+  private async cleanupParticipant(socket: Socket) {
+    const streamId = this.socketToStream[socket.id];
+    if (
+      !streamId ||
+      !this.participants[streamId] ||
+      !this.participants[streamId][socket.id]
+    ) {
+      return;
+    }
+
+    const participant = this.participants[streamId][socket.id];
+
+    // Close transports
+    if (participant.sendTransport) {
+      participant.sendTransport.close();
+    }
+
+    if (participant.receiveTransport) {
+      participant.receiveTransport.close();
+    }
+
+    // Close producers and remove from stream producers list
+    participant.producers.forEach((producer) => {
+      producer.close();
+
+      if (this.streamProducers[streamId]) {
+        const index = this.streamProducers[streamId].findIndex(
+          (p) => p.id === producer.id
+        );
+        if (index !== -1) {
+          this.streamProducers[streamId].splice(index, 1);
+        }
+      }
+    });
+
+    // Close consumers
+    participant.consumers.forEach((consumer) => {
+      consumer.close();
+    });
+
+    // Remove participant from tracking
+    delete this.participants[streamId][socket.id];
+    delete this.socketToStream[socket.id];
+
+    // If no participants left in stream, clean up router
+    if (Object.keys(this.participants[streamId]).length === 0) {
+      if (this.routers[streamId]) {
+        this.routers[streamId].close();
+        delete this.routers[streamId];
+      }
+      delete this.participants[streamId];
+      delete this.streamProducers[streamId];
+    } else {
+      // Notify others that participant left
+      this.broadcastStreamUpdate(streamId);
+      this.io
+        .to(streamId)
+        .emit("participantLeft", { userId: participant.userId });
+    }
   }
 
   private initializeSocketEvents() {
-    this.io.on("connection", (socket: CustomSocket) => {
+    this.io.on("connection", (socket: Socket) => {
       console.log("A user connected:", socket.id);
 
       socket.on("generateInvite", async (data) => {
-        const { channelId, userId } = data;
-        const inviteService = new createInviteUsecase();
-        const token = await inviteService.createInvite(channelId, userId);
-        const inviteLink = `http://localhost:3001/dashboard/streamer/live?token=${token}`;
-        socket.emit("inviteLink", { link: inviteLink, userId });
+        try {
+          const { channelId, userId } = data;
+          const inviteService = new createInviteUsecase();
+          const token = await inviteService.createInvite(channelId, userId);
+          const inviteLink = `http://localhost:3001/dashboard/streamer/live?token=${token}`;
+          socket.emit("inviteLink", { link: inviteLink, userId });
+        } catch (error) {
+          console.error("Error generating invite:", error);
+          socket.emit("error", { message: "Failed to generate invite link" });
+        }
       });
 
       socket.on(
         "joinStudio",
         async (data: { role: string; user: any; channelData: any }) => {
-          const { role, user, channelData } = data;
-          console.log(`${role} joined studio:`, user, "user got", channelData);
-          const stream: any = await this.getLatestStreamUsecase.execute(
-            channelData._id
-          );
-          console.log(stream, "got stream latest for streaming");
+          try {
+            const { role, user, channelData } = data;
+            const stream: any = await this.getLatestStreamUsecase.execute(
+              channelData._id
+            );
 
-          if (stream?.id) {
+            if (!stream?.id) {
+              socket.emit("error", {
+                message: "No active stream found for this channel",
+              });
+              return;
+            }
+
+            // Create router if needed
+            const router = await this.createRouterIfNeeded(stream.id);
+            if (!router) {
+              socket.emit("error", {
+                message: "Failed to initialize stream resources",
+              });
+              return;
+            }
+
+            // Join socket to room
             socket.join(stream.id);
-            console.log("Socket joined room", stream.id);
+            this.socketToStream[socket.id] = stream.id;
+
+            if (!this.participants[stream.id]) {
+              this.participants[stream.id] = {};
+              this.streamProducers[stream.id] = [];
+            }
 
             if (role === "host") {
-              if (!this.routers.has(stream.id)) {
-                const router = await this.worker.createRouter({
-                  mediaCodecs: [
-                    {
-                      kind: "audio",
-                      mimeType: "audio/opus",
-                      clockRate: 48000,
-                      channels: 2,
-                    },
-                    { kind: "video", mimeType: "video/VP8", clockRate: 90000 },
-                    {
-                      kind: "video",
-                      mimeType: "video/H264",
-                      clockRate: 90000,
-                      parameters: {
-                        "packetization-mode": 1,
-                        "profile-level-id": "42e01f",
-                        "level-asymmetry-allowed": 1,
-                      },
-                    },
-                  ],
-                });
-                this.routers.set(stream.id, router);
-                socket.streamId = stream.id;
-                socket.userId = user._id;
-                console.log(`Router created for stream ${stream.id}`);
-              }
-              const hostParticipant: any = {
+              const hostParticipant: Participant = {
                 userId: user._id,
                 role: "host",
                 username: user.username,
+                producers: [],
+                consumers: [],
               };
-              const updatedStream =
-                await this.UpdateStreamParticipantUsecase.execute(
-                  stream.id,
-                  hostParticipant
-                );
-              console.log(
-                updatedStream,
-                "updated stream got in the participant"
+
+              this.participants[stream.id][socket.id] = hostParticipant;
+              await this.updateStreamParticipantUsecase.execute(
+                stream.id,
+                hostParticipant
               );
-              this.io.to(stream.id).emit("streamUpdate", updatedStream);
-              this.io.to(stream.id).emit("participantJoined", hostParticipant);
+
+              this.broadcastStreamUpdate(stream.id);
+              socket.emit("participantJoined", hostParticipant);
+
+              // Send existing producers to host
+              this.sendExistingProducers(socket, stream.id);
             } else {
-              socket.streamId = stream.id;
-              socket.userId = user._id;
-              console.log(
-                "ggggggggggggggggguessssssssssssssssssssssssssssssssssssssssst i s sssssssssssssssssssssss joineeeeeeeeeeeeeeidng"
-              );
-              socket.emit("streamUpdate", stream);
-            }
-
-            // Send existing producers to the new participant
-            const existingProducers = Array.from(this.producers.values())
-              .filter(
-                (p) =>
-                  p.appData.streamId === stream.id &&
-                  p.appData.userId !== socket.userId
-              )
-              .map((p) => ({
-                producerId: p.id,
-                producerUserId: p.appData.userId,
-              }));
-            socket.emit("existingProducers", existingProducers);
-            console.log(
-              "Sent existing producers to new participant:",
-              existingProducers
-            );
-          } else {
-            console.warn("No stream found for channel:", channelData._id);
-            socket.emit("error", {
-              message: "No active stream found for this channel",
-            });
-          }
-        }
-      );
-
-      socket.on("getMediasoupConfig", async (callback) => {
-        const streamId = socket.streamId;
-
-        if (!streamId) return callback({ error: "Not joined to any stream" });
-        const router = this.routers.get(streamId);
-        if (!router)
-          return callback({ error: "Router not found for this stream" });
-        callback({ routerRtpCapabilities: router.rtpCapabilities });
-      });
-
-      socket.on(
-        "createTransport",
-        async (
-          direction: "send" | "recv",
-          callback: (transportOptions: any) => void
-        ) => {
-          const streamId = socket.streamId;
-          if (!streamId) return callback({ error: "Not joined to any stream" });
-          const router = this.routers.get(streamId);
-          if (!router)
-            return callback({ error: "Router not found for this stream" });
-
-          try {
-            const transport = await router.createWebRtcTransport({
-              listenIps: [{ ip: "0.0.0.0", announcedIp: "127.0.0.1" }],
-              enableUdp: true,
-              enableTcp: true,
-              preferUdp: true,
-              initialAvailableOutgoingBitrate: 1000000,
-            });
-
-            this.transports.set(transport.id, transport);
-            socket.transports = socket.transports || { send: "", recv: "" };
-            socket.transports[direction] = transport.id;
-
-            callback({
-              id: transport.id,
-              iceParameters: transport.iceParameters,
-              iceCandidates: transport.iceCandidates,
-              dtlsParameters: transport.dtlsParameters,
-            });
-
-            transport.on("routerclose", () => {
-              transport.close();
-              this.transports.delete(transport.id);
-            });
-          } catch (error) {
-            console.error("Error creating transport:", error);
-            callback({ error: "Failed to create transport" });
-          }
-        }
-      );
-
-      socket.on(
-        "connectTransport",
-        async ({ transportId, dtlsParameters }, callback) => {
-          const transport = this.transports.get(transportId);
-          if (!transport) return callback({ error: "Transport not found" });
-
-          try {
-            await transport.connect({ dtlsParameters });
-            callback({});
-          } catch (error) {
-            console.error("Error connecting transport:", error);
-            callback({ error: "Failed to connect transport" });
-          }
-        }
-      );
-      socket.on(
-        "produce",
-        async ({ transportId, kind, rtpParameters, appData }, callback) => {
-          const transport = this.transports.get(transportId);
-          console.log("transport inside the produce", transport);
-          if (!transport) return callback({ error: "Transport not found" });
-
-          try {
-            const producer = await transport.produce({
-              kind,
-              rtpParameters,
-              appData: {
-                ...appData,
-                userId: socket.userId,
-                streamId: socket.streamId,
-              },
-            });
-            this.producers.set(producer.id, producer);
-            console.log("producer id", producer.id, "producer", producer);
-            socket.producerIds = socket.producerIds || [];
-            socket.producerIds.push(producer.id);
-            console.log("socket producer ids", socket.producerIds);
-
-            const streamId = socket.streamId;
-            if (streamId && socket.userId) {
-              this.io.to(streamId).emit("newProducer", {
-                producerId: producer.id,
-                producerUserId: socket.userId,
+              // For viewers that aren't hosts or guests yet
+              const participantsList = this.getParticipantsList(stream.id);
+              socket.emit("streamUpdate", {
+                id: stream.id,
+                participants: participantsList,
               });
-            }
-            console.log(
-              "producer id in the callback",
-              producer.id,
-              socket.streamId
-            );
-            callback({ id: producer.id });
 
-            producer.on("transportclose", () => {
-              producer.close();
-              this.producers.delete(producer.id);
-            });
+              // Send existing producers
+              this.sendExistingProducers(socket, stream.id);
+            }
           } catch (error) {
-            console.error("Error producing:", error);
-            callback({ error: "Failed to produce" });
+            console.error("Error in joinStudio:", error);
+            socket.emit("error", { message: "Failed to join studio" });
           }
         }
       );
-      socket.on(
-        "consume",
-        async ({ transportId, producerId, rtpCapabilities }, callback) => {
-          console.log(
-            "Received consume event with callback type:",
-            typeof callback
-          );
-          const transport = this.transports.get(transportId);
-          if (!transport) {
-            if (typeof callback === "function") {
-              callback({ error: "Transport not found" });
-            } else {
-              console.warn("No callback provided, skipping response");
-            }
-            return;
-          }
-          const router = this.routers.get(socket.streamId!);
-          if (!router) {
-            if (typeof callback === "function") {
-              callback({ error: "Router not found" });
-            }
-            return;
-          }
-
-          const producer = this.producers.get(producerId);
-          if (!producer) {
-            if (typeof callback === "function") {
-              callback({ error: "Producer not found" });
-            }
-            return;
-          }
-
-          if (!router.canConsume({ producerId, rtpCapabilities })) {
-            if (typeof callback === "function") {
-              callback({ error: "Cannot consume this producer" });
-            }
-            return;
-          }
-
-          try {
-            const consumer = await transport.consume({
-              producerId,
-              rtpCapabilities,
-              paused: true,
-              appData: producer.appData,
-            });
-            console.log(consumer, "consumer got in the consume");
-            this.consumers.set(consumer.id, consumer);
-
-            const response = {
-              id: consumer.id,
-              producerId,
-              kind: consumer.kind,
-              rtpParameters: consumer.rtpParameters,
-              appData: consumer.appData,
-            };
-
-            console.log(response, "response in the consume");
-
-            if (typeof callback === "function") {
-              callback(response);
-            } else {
-              console.warn("No callback provided for consume response");
-            }
-
-            consumer.on("producerclose", () => {
-              consumer.close();
-              this.consumers.delete(consumer.id);
-              socket.emit("producerClosed", { producerId });
-            });
-          } catch (error) {
-            console.error("Error consuming:", error);
-            if (typeof callback === "function") {
-              callback({ error: "Failed to consume" });
-            }
-          }
-        }
-      );
-
-      socket.on("resumeConsumer", async (consumerId, callback) => {
-        const consumer = this.consumers.get(consumerId);
-        if (consumer) {
-          try {
-            await consumer.resume();
-            console.log(`Consumer ${consumerId} resumed successfully`);
-            callback({ success: true });
-          } catch (error: any) {
-            console.error(`Error resuming consumer ${consumerId}:`, error);
-            callback({ success: false, error: error.message });
-          }
-        } else {
-          console.warn(`Consumer ${consumerId} not found`);
-          callback({ success: false, error: "Consumer not found" });
-        }
-      });
-      socket.on("closeProducer", async ({ producerId }) => {
-        const producer = this.producers.get(producerId);
-        if (producer) {
-          producer.close();
-          this.producers.delete(producerId);
-          if (socket.streamId) {
-            this.io.to(socket.streamId).emit("producerClosed", { producerId });
-          }
-        }
-      });
 
       socket.on("verifyInvite", async (data, callback) => {
-        const { token, username } = data;
         try {
-          console.log(token, "token got in the verifyINvite");
-          const invite = await this.InviteRepository.findByToken(token);
+          const { token, username } = data;
+
+          const invite = await this.inviteRepository.findByToken(token);
           if (!invite || invite.expiresAt <= new Date()) {
             callback({ success: false, message: "Invite expired or invalid" });
+            return;
+          }
+
+          if (data.userId && invite.userId !== data.userId) {
+            callback({
+              success: false,
+              message: "You are not the invited user",
+            });
             return;
           }
 
@@ -435,17 +335,40 @@ export class SocketService {
           }
 
           if (invite.isApproved) {
+            await this.createRouterIfNeeded(stream.id);
+
+            const participant: Participant = {
+              userId: invite.userId,
+              role: "guest",
+              username: username || "Guest",
+              producers: [],
+              consumers: [],
+            };
+
             socket.join(stream.id);
-            const participant = { userId: invite.userId, role: "guest" };
+            this.socketToStream[socket.id] = stream.id;
+
+            if (!this.participants[stream.id]) {
+              this.participants[stream.id] = {};
+              this.streamProducers[stream.id] = [];
+            }
+
+            this.participants[stream.id][socket.id] = participant;
+            await this.updateStreamParticipantUsecase.execute(
+              stream.id,
+              participant
+            );
+
+            this.broadcastStreamUpdate(stream.id);
+            socket.emit("participantJoined", participant);
+
+            // Send existing producers to guest
+            this.sendExistingProducers(socket, stream.id);
+
             callback({
               success: true,
               roomId: invite.channelId,
               streamId: stream.id,
-            });
-            this.io.to(stream.id).emit("participantJoined", {
-              userId: invite.userId,
-              role: "guest",
-              username: username || "Guest",
             });
           } else {
             callback({ success: true, roomId: invite.channelId });
@@ -456,115 +379,80 @@ export class SocketService {
         }
       });
 
-      socket.on(
-        "requestToJoin",
-        async (data: any, callback?: (response: any) => void) => {
-          const { token, username, channelId, userId, cameraOn, micOn } = data;
-          console.log(data, "in the request join have this data as data");
-          try {
-            const invite = await this.InviteRepository.findByToken(token);
-            if (
-              !invite ||
-              invite.expiresAt <= new Date() ||
-              invite.channelId !== channelId
-            ) {
-              const errorResponse = {
-                success: false,
-                message: "Invalid or expired invite",
-              };
-              if (callback) {
-                callback(errorResponse);
-              } else {
-                socket.emit("error", errorResponse);
-              }
-              return;
-            }
-
-            if (invite.userId !== userId) {
-              const errorResponse = {
-                success: false,
-                message: "You are not the invited user",
-              };
-              if (callback) {
-                callback(errorResponse);
-              } else {
-                socket.emit("error", errorResponse);
-              }
-              return;
-            }
-            console.log("got invite in the request join");
-
-            const stream = await this.getLatestStreamUsecase.execute(channelId);
-            console.log("Stream in requestToJoin:", stream);
-            if (!stream?.id) {
-              const errorResponse = {
-                success: false,
-                message: "No active stream found",
-              };
-              if (callback) {
-                callback(errorResponse);
-              } else {
-                socket.emit("error", errorResponse);
-              }
-              return;
-            }
-
-            console.log(`Emitting guestRequest to room ${stream.id}`);
-            this.io.to(stream.id).emit("guestRequest", {
-              token,
-              username,
-              channelId,
-              socketId: socket.id,
-              userId,
-              cameraOn,
-              micOn,
-            });
-
-            const successResponse = {
-              success: true,
-              message: "Waiting for host approval",
-            };
-            if (callback) {
-              callback(successResponse);
-            } else {
-              socket.emit("joinRequestResponse", successResponse);
-            }
-          } catch (error) {
-            console.error("Error in requestToJoin:", error);
-            const errorResponse = {
-              success: false,
-              message: "Internal server error",
-            };
-            if (callback) {
-              callback(errorResponse);
-            } else {
-              socket.emit("error", errorResponse);
-            }
-          }
-        }
-      );
-      socket.on("approveGuest", async (data) => {
-        const { token, username, channelId, socketId, approverId } = data;
-        console.log(data, "data got in the approve guest");
+      socket.on("requestToJoin", async (data, callback) => {
         try {
+          const { token, username, channelId, userId, cameraOn, micOn } = data;
+
+          const invite = await this.inviteRepository.findByToken(token);
+          if (
+            !invite ||
+            invite.expiresAt <= new Date() ||
+            invite.channelId !== channelId
+          ) {
+            callback({ success: false, message: "Invalid or expired invite" });
+            return;
+          }
+
+          if (invite.userId !== userId) {
+            callback({
+              success: false,
+              message: "You are not the invited user",
+            });
+            return;
+          }
+
           const stream = await this.getLatestStreamUsecase.execute(channelId);
-          console.log(stream, "stream got in the approveg uest");
+          if (!stream?.id) {
+            callback({ success: false, message: "No active stream found" });
+            return;
+          }
+
+          const streamParticipants = this.participants[stream.id];
+          if (
+            !streamParticipants ||
+            !Object.values(streamParticipants).some((p) => p.role === "host")
+          ) {
+            callback({
+              success: false,
+              message: "No host present in the stream",
+            });
+            return;
+          }
+
+          this.io.to(stream.id).emit("guestRequest", {
+            token,
+            username,
+            channelId,
+            socketId: socket.id,
+            userId,
+            cameraOn,
+            micOn,
+          });
+
+          callback({ success: true, message: "Waiting for host approval" });
+        } catch (error) {
+          console.error("Error in requestToJoin:", error);
+          callback({ success: false, message: "Internal server error" });
+        }
+      });
+
+      socket.on("approveGuest", async (data) => {
+        try {
+          const { token, username, channelId, socketId, approverId } = data;
+
+          const stream = await this.getLatestStreamUsecase.execute(channelId);
           if (!stream?.id) {
             socket.emit("error", { message: "No active stream found" });
             return;
           }
 
-          if (!(await this.canAddParticipant(channelId))) {
+          if (!(await this.canAddParticipant(stream.id))) {
             this.io.to(socketId).emit("joinDenied", {
               message: "Maximum guest limit (6) reached",
             });
             return;
           }
-          console.log(
-            stream.createdBy.toString(),
-            approverId,
-            "both id in the request josin"
-          );
+
           if (stream.createdBy.toString() !== approverId) {
             socket.emit("error", {
               message: "Only the host can approve guests",
@@ -572,73 +460,96 @@ export class SocketService {
             return;
           }
 
-          const invite = await this.InviteRepository.findByToken(token);
-          console.log(invite, "invite int eh gotrequst join");
+          const invite = await this.inviteRepository.findByToken(token);
           if (
             !invite ||
             invite.expiresAt <= new Date() ||
             invite.channelId !== channelId
           ) {
-            console.log("invite worign");
             this.io
               .to(socketId)
               .emit("joinDenied", { message: "Invalid or expired invite" });
             return;
           }
 
-          const participant: any = {
-            userId: invite.userId,
-            role: "guest",
-            username: username,
-          };
-          const updatedStream =
-            await this.UpdateStreamParticipantUsecase.execute(
-              stream.id,
-              participant
-            );
-          console.log(updatedStream, "updated strem response");
-          await this.InviteRepository.updateByToken(token, {
-            isApproved: true,
-          });
+          const router = await this.createRouterIfNeeded(stream.id);
+          if (!router) {
+            this.io.to(socketId).emit("joinDenied", {
+              message: "Failed to initialize stream resources",
+            });
+            return;
+          }
 
-          this.io.to(stream.id).emit("streamUpdate", updatedStream);
-          this.io.to(socketId).emit("joinApproved", { streamId: stream.id });
-          this.io.to(stream.id).emit("participantJoined", {
+          const guestSocket = this.io.sockets.sockets.get(socketId);
+          if (!guestSocket) {
+            socket.emit("error", { message: "Guest socket not found" });
+            return;
+          }
+          guestSocket.join(stream.id);
+
+          if (!this.participants[stream.id]) {
+            this.participants[stream.id] = {};
+          }
+
+          const participant: Participant = {
             userId: invite.userId,
             role: "guest",
             username,
+            producers: [],
+            consumers: [],
+            cameraOn: data.cameraOn || false,
+            micOn: data.micOn || false,
+          };
+
+          this.participants[stream.id][socketId] = participant;
+          this.socketToStream[socketId] = stream.id;
+
+          await this.updateStreamParticipantUsecase.execute(
+            stream.id,
+            participant
+          );
+
+          await this.inviteRepository.updateByToken(token, {
+            isApproved: true,
           });
+
+          this.broadcastStreamUpdate(stream.id);
+          this.io.to(socketId).emit("joinApproved", { streamId: stream.id });
+
+          // Send existing producers to new guest
+          this.sendExistingProducers(
+            this.io.sockets.sockets.get(socketId)!,
+            stream.id
+          );
+
+          this.io.to(stream.id).emit("participantJoined", participant);
         } catch (error) {
           console.error("Error approving guest:", error);
           this.io
-            .to(socketId)
+            .to(socket.id)
             .emit("joinDenied", { message: "Internal server error" });
         }
       });
 
       socket.on("denyGuest", ({ socketId, approverId, channelId }) => {
-        // Verify the denier is the host
         this.getLatestStreamUsecase.execute(channelId).then((stream) => {
-          if (stream && stream.createdBy === approverId) {
+          if (stream && stream.createdBy.toString() === approverId) {
             this.io
               .to(socketId)
               .emit("joinDenied", { message: "Host denied your request" });
           }
         });
       });
+
       socket.on("getStreamSettings", async (streamId: string) => {
         try {
           if (!streamId) {
-            console.warn("No streamId provided in getStreamSettings");
             socket.emit("error", { message: "Stream ID is required" });
             return;
           }
-
-          console.log(streamId, "stream id received in getStreamSettings");
           const settings = await this.getStreamSettingsUsecase.execute(
             streamId
           );
-          console.log(settings, "settings");
           socket.emit("streamSettings", settings || {});
         } catch (error) {
           console.error("Error fetching stream settings:", error);
@@ -646,56 +557,419 @@ export class SocketService {
         }
       });
 
-      socket.on(
-        "updateStreamSettings",
-        async ({
-          streamId,
-          settings: newSettings,
-        }: {
-          streamId: string;
-          settings: any;
-        }) => {
-          try {
-            if (!streamId) {
-              console.warn("No streamId provided in updateStreamSettings");
-              socket.emit("error", { message: "Stream ID is required" });
-              return;
-            }
-
-            console.log(streamId, "stream id in updateStreamSettings");
-            let settings = await this.getStreamSettingsUsecase.execute(
-              streamId
+      socket.on("updateStreamSettings", async ({ streamId, settings }) => {
+        try {
+          if (!streamId) {
+            socket.emit("error", { message: "Stream ID is required" });
+            return;
+          }
+          let updatedSettings = await this.getStreamSettingsUsecase.execute(
+            streamId
+          );
+          if (updatedSettings) {
+            updatedSettings = await this.updateStreamSettingsUsecase.execute(
+              streamId,
+              {
+                ...settings,
+                streamId,
+              }
             );
-
-            if (settings) {
-              settings = await this.updateStreamSettingsUsecase.execute(
-                streamId,
-                {
-                  ...newSettings,
-                  streamId,
-                }
-              );
-            } else {
-              console.log("No settings found creating new one");
-              settings = await this.createStreamSettingsUsecase.execute({
-                ...newSettings,
-                streamId,
-              });
-            }
-
-            this.io.to(streamId).emit("streamSettings", settings);
-          } catch (error) {
-            console.error("Error updating stream settings:", error);
-            socket.emit("error", {
-              message: "Failed to update stream settings",
+          } else {
+            updatedSettings = await this.createStreamSettingsUsecase.execute({
+              ...settings,
+              streamId,
             });
           }
+          this.io.to(streamId).emit("streamSettings", updatedSettings);
+        } catch (error) {
+          console.error("Error updating stream settings:", error);
+          socket.emit("error", { message: "Failed to update stream settings" });
         }
-      );
+      });
 
-      socket.on("disconnect", () => {
-        console.log("A user disconnected:", socket.id);
+      // Mediasoup Events
+      socket.on("getRtpCapabilities", (data, callback) => {
+        try {
+          const { streamId } = data;
+          const router = this.routers[streamId];
+          if (router) {
+            callback({ rtpCapabilities: router.rtpCapabilities });
+          } else {
+            callback({ error: "Router not found" });
+          }
+        } catch (error) {
+          console.error("Error getting RTP capabilities:", error);
+          callback({ error: "Failed to get RTP capabilities" });
+        }
+      });
+
+      socket.on("createWebRtcTransport", async (data, callback) => {
+        try {
+          const { streamId, direction } = data; // 'send' or 'recv'
+
+          if (!streamId) {
+            callback({ error: "Stream ID is required" });
+            return;
+          }
+
+          const router = this.routers[streamId];
+          if (!router) {
+            callback({ error: "Router not found" });
+            return;
+          }
+
+          if (
+            !this.participants[streamId] ||
+            !this.participants[streamId][socket.id]
+          ) {
+            callback({ error: "Participant not found" });
+            return;
+          }
+
+          const participant = this.participants[streamId][socket.id];
+
+          const transport = await router.createWebRtcTransport({
+            listenIps: [{ ip: "0.0.0.0" }],
+            enableUdp: true,
+            enableTcp: true,
+            preferUdp: true,
+          });
+
+          if (direction === "send") {
+            participant.sendTransport = transport;
+          } else {
+            participant.receiveTransport = transport;
+          }
+
+          callback({
+            id: transport.id,
+            iceParameters: transport.iceParameters,
+            iceCandidates: transport.iceCandidates,
+            dtlsParameters: transport.dtlsParameters,
+          });
+        } catch (error) {
+          console.error("Error creating WebRtcTransport:", error);
+          callback({ error: "Failed to create transport" });
+        }
+      });
+
+      socket.on("connectTransport", async (data, callback) => {
+        try {
+          const { streamId, transportId, dtlsParameters } = data;
+
+          if (
+            !streamId ||
+            !this.participants[streamId] ||
+            !this.participants[streamId][socket.id]
+          ) {
+            callback({ error: "Participant not found" });
+            return;
+          }
+
+          const participant = this.participants[streamId][socket.id];
+          const transport =
+            participant.sendTransport?.id === transportId
+              ? participant.sendTransport
+              : participant.receiveTransport;
+
+          if (!transport) {
+            callback({ error: "Transport not found" });
+            return;
+          }
+
+          await transport.connect({ dtlsParameters });
+          callback({ success: true });
+        } catch (error) {
+          console.error("Error connecting transport:", error);
+          callback({ error: "Failed to connect transport" });
+        }
+      });
+
+      socket.on("produce", async (data, callback) => {
+        try {
+          const { streamId, kind, rtpParameters, appData } = data;
+
+          if (
+            !streamId ||
+            !this.participants[streamId] ||
+            !this.participants[streamId][socket.id]
+          ) {
+            callback({ error: "Participant not found" });
+            return;
+          }
+
+          const participant = this.participants[streamId][socket.id];
+          if (!participant.sendTransport) {
+            callback({ error: "Send transport not found" });
+            return;
+          }
+
+          const producer = await participant.sendTransport.produce({
+            kind,
+            rtpParameters,
+            appData, // e.g., { source: "webcam" | "mic" | "screen" }
+          });
+
+          participant.producers.push(producer);
+
+          // Add to stream producers list for new participants
+          if (!this.streamProducers[streamId]) {
+            this.streamProducers[streamId] = [];
+          }
+
+          this.streamProducers[streamId].push({
+            id: producer.id,
+            kind,
+            userId: participant.userId,
+            appData,
+          });
+
+          // Notify all participants about the new producer
+          this.io.to(streamId).emit("newProducer", {
+            producerId: producer.id,
+            userId: participant.userId,
+            kind,
+            appData,
+          });
+
+          callback({ id: producer.id });
+
+          // Listen for producer close events
+          producer.on("transportclose", () => {
+            console.log(`Producer ${producer.id} transport closed`);
+            this.removeProducerFromStream(streamId, producer.id);
+          });
+
+          producer.on("@close", () => {
+            console.log(`Producer ${producer.id} closed`);
+            this.removeProducerFromStream(streamId, producer.id);
+          });
+        } catch (error) {
+          console.error("Error producing:", error);
+          callback({ error: "Failed to produce" });
+        }
+      });
+
+      socket.on("pauseProducer", async (data, callback) => {
+        try {
+          const { streamId, producerId } = data;
+
+          if (
+            !streamId ||
+            !this.participants[streamId] ||
+            !this.participants[streamId][socket.id]
+          ) {
+            callback({ error: "Participant not found" });
+            return;
+          }
+
+          const participant = this.participants[streamId][socket.id];
+          const producer = participant.producers.find(
+            (p) => p.id === producerId
+          );
+
+          if (!producer) {
+            callback({ error: "Producer not found" });
+            return;
+          }
+
+          await producer.pause();
+
+          // Notify other participants with appData
+          this.io.to(streamId).emit("producerPaused", {
+            producerId,
+            userId: participant.userId,
+            appData: producer.appData,
+          });
+
+          callback({ success: true });
+        } catch (error) {
+          console.error("Error pausing producer:", error);
+          callback({ error: "Failed to pause producer" });
+        }
+      });
+      // Resume producer
+      socket.on("resumeProducer", async (data, callback) => {
+        try {
+          const { streamId, producerId } = data;
+
+          if (
+            !streamId ||
+            !this.participants[streamId] ||
+            !this.participants[streamId][socket.id]
+          ) {
+            callback({ error: "Participant not found" });
+            return;
+          }
+
+          const participant = this.participants[streamId][socket.id];
+          const producer = participant.producers.find(
+            (p) => p.id === producerId
+          );
+
+          if (!producer) {
+            callback({ error: "Producer not found" });
+            return;
+          }
+
+          await producer.resume();
+
+          // Notify other participants with appData
+          this.io.to(streamId).emit("producerResumed", {
+            producerId,
+            userId: participant.userId,
+            appData: producer.appData,
+          });
+
+          callback({ success: true });
+        } catch (error) {
+          console.error("Error resuming producer:", error);
+          callback({ error: "Failed to resume producer" });
+        }
+      });
+
+      socket.on("consume", async (data, callback) => {
+        try {
+          const { streamId, producerId, rtpCapabilities } = data;
+
+          if (!streamId) {
+            callback({ error: "Stream ID is required" });
+            return;
+          }
+
+          const router = this.routers[streamId];
+          if (!router) {
+            callback({ error: "Router not found" });
+            return;
+          }
+
+          if (
+            !this.participants[streamId] ||
+            !this.participants[streamId][socket.id]
+          ) {
+            callback({ error: "Participant not found" });
+            return;
+          }
+
+          const participant = this.participants[streamId][socket.id];
+          if (!participant.receiveTransport) {
+            callback({ error: "Receive transport not found" });
+            return;
+          }
+
+          // Find the producer by ID
+          let producerObject: mediasoupTypes.Producer | undefined;
+          for (const p of Object.values(this.participants[streamId])) {
+            producerObject = p.producers.find((prod) => prod.id === producerId);
+            if (producerObject) break;
+          }
+
+          if (!producerObject) {
+            callback({ error: "Producer not found" });
+            return;
+          }
+
+          // Check if router can consume
+          if (!router.canConsume({ producerId, rtpCapabilities })) {
+            callback({
+              error: "Router cannot consume with given RTP capabilities",
+            });
+            return;
+          }
+
+          const consumer = await participant.receiveTransport.consume({
+            producerId,
+            rtpCapabilities,
+            paused: true, // Start paused, will resume after getting response
+          });
+
+          participant.consumers.push(consumer);
+
+          // Handle consumer events
+          consumer.on("transportclose", () => {
+            console.log(`Consumer ${consumer.id} transport closed`);
+          });
+
+          consumer.on("producerclose", () => {
+            console.log(`Consumer ${consumer.id} producer closed`);
+            const index = participant.consumers.findIndex(
+              (c) => c.id === consumer.id
+            );
+            if (index !== -1) {
+              participant.consumers.splice(index, 1);
+            }
+            // Notify the client that producer was closed
+            socket.emit("consumerClosed", {
+              consumerId: consumer.id,
+              reason: "producer closed",
+            });
+          });
+
+          callback({
+            id: consumer.id,
+            producerId,
+            kind: consumer.kind,
+            rtpParameters: consumer.rtpParameters,
+          });
+        } catch (error) {
+          console.error("Error consuming:", error);
+          callback({ error: "Failed to consume" });
+        }
+      });
+
+      socket.on("resumeConsumer", async (data, callback) => {
+        try {
+          const { streamId, consumerId } = data;
+
+          if (
+            !streamId ||
+            !this.participants[streamId] ||
+            !this.participants[streamId][socket.id]
+          ) {
+            callback({ error: "Participant not found" });
+            return;
+          }
+
+          const participant = this.participants[streamId][socket.id];
+          const consumer = participant.consumers.find(
+            (c) => c.id === consumerId
+          );
+
+          if (!consumer) {
+            callback({ error: "Consumer not found" });
+            return;
+          }
+
+          await consumer.resume();
+          callback({ success: true });
+        } catch (error) {
+          console.error("Error resuming consumer:", error);
+          callback({ error: "Failed to resume consumer" });
+        }
+      });
+
+      socket.on("disconnect", async () => {
+        try {
+          await this.cleanupParticipant(socket);
+          console.log("A user disconnected:", socket.id);
+        } catch (error) {
+          console.error("Error handling disconnect:", error);
+        }
       });
     });
+  }
+
+  private removeProducerFromStream(streamId: string, producerId: string) {
+    if (!this.streamProducers[streamId]) return;
+
+    const index = this.streamProducers[streamId].findIndex(
+      (p) => p.id === producerId
+    );
+    if (index !== -1) {
+      this.streamProducers[streamId].splice(index, 1);
+    }
+
+    // Notify all participants that the producer is gone
+    this.io.to(streamId).emit("producerClosed", { producerId });
   }
 }
