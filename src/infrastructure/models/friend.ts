@@ -9,6 +9,13 @@ import {
 } from "typeorm";
 import { UserModel } from "./user";
 
+export enum FriendStatus {
+  PENDING = "PENDING",
+  ACCEPTED = "ACCEPTED",
+  REJECTED = "REJECTED",
+  BLOCKED = "BLOCKED",
+}
+
 @Entity("friends")
 export class FriendModel {
   @PrimaryGeneratedColumn("uuid")
@@ -24,17 +31,19 @@ export class FriendModel {
 
   @Column({
     type: "enum",
-    enum: ["PENDING", "ACCEPTED", "REJECTED", "BLOCKED"],
-    default: "PENDING",
+    enum: FriendStatus,
+    enumName: "friend_status_enum", 
+    default: FriendStatus.PENDING,
   })
-  status: string;
+  status: FriendStatus;
 
   @Column({
     type: "enum",
-    enum: ["PENDING", "ACCEPTED", "REJECTED", "BLOCKED"],
+    enum: FriendStatus,
+    enumName: "friend_status_enum", 
     nullable: true,
   })
-  previousStatus: string | null;
+  previousStatus: FriendStatus | null;
 
   @CreateDateColumn()
   createdAt: Date;

@@ -280,6 +280,7 @@ export class SocketService {
               };
 
               this.participants[stream.id][socket.id] = hostParticipant;
+              console.log(this.participants, "participants in the joinStudio");
               await this.updateStreamParticipantUsecase.execute(
                 stream.id,
                 hostParticipant
@@ -641,6 +642,8 @@ export class SocketService {
             participant.receiveTransport = transport;
           }
 
+          console.log(transport, "transport in createWebRtcTransport");
+
           callback({
             id: transport.id,
             iceParameters: transport.iceParameters,
@@ -752,7 +755,8 @@ export class SocketService {
 
       socket.on("pauseProducer", async (data, callback) => {
         try {
-          const { streamId, producerId } = data;
+          const { producerId } = data;
+          const streamId = this.socketToStream[socket.id];
 
           if (
             !streamId ||
@@ -791,7 +795,8 @@ export class SocketService {
       // Resume producer
       socket.on("resumeProducer", async (data, callback) => {
         try {
-          const { streamId, producerId } = data;
+          const { producerId } = data;
+          const streamId = this.socketToStream[socket.id];
 
           if (
             !streamId ||
@@ -830,12 +835,14 @@ export class SocketService {
 
       socket.on("consume", async (data, callback) => {
         try {
-          const { streamId, producerId, rtpCapabilities } = data;
-
+          const { producerId, rtpCapabilities } = data;
+          const streamId = this.socketToStream[socket.id];
           if (!streamId) {
             callback({ error: "Stream ID is required" });
             return;
           }
+
+          console.log(this.participants, "participants in consume");
 
           const router = this.routers[streamId];
           if (!router) {
@@ -843,10 +850,23 @@ export class SocketService {
             return;
           }
 
+          console.log(
+            streamId,
+            "streamId in consume",
+            socket.id,
+            "socketId in consume"
+          );
+
           if (
             !this.participants[streamId] ||
             !this.participants[streamId][socket.id]
           ) {
+            console.log(
+              "participants in consume if condition",
+              this.participants
+            );
+            console.log("socketId in consume if condition", socket.id);
+
             callback({ error: "Participant not found" });
             return;
           }
@@ -856,6 +876,8 @@ export class SocketService {
             callback({ error: "Receive transport not found" });
             return;
           }
+
+          console.log("finding producer object");
 
           // Find the producer by ID
           let producerObject: mediasoupTypes.Producer | undefined;
@@ -885,6 +907,8 @@ export class SocketService {
 
           participant.consumers.push(consumer);
 
+          console.log(participant.consumers, "consumers in consume");
+
           // Handle consumer events
           consumer.on("transportclose", () => {
             console.log(`Consumer ${consumer.id} transport closed`);
@@ -904,7 +928,14 @@ export class SocketService {
               reason: "producer closed",
             });
           });
-
+          console.log(
+            "sending to the frontend consumer data",
+            consumer.id,
+            producerId,
+            consumer.kind,
+            consumer.rtpParameters,
+            streamId
+          );
           callback({
             id: consumer.id,
             producerId,
@@ -919,10 +950,16 @@ export class SocketService {
 
       socket.on("resumeConsumer", async (data, callback) => {
         try {
-          const { streamId, consumerId } = data;
+          const { consumerId } = data;
+
+          const streamId = this.socketToStream[socket.id];
+
+          if (!streamId) {
+            callback({ error: "You are not connected to any stream" });
+            return;
+          }
 
           if (
-            !streamId ||
             !this.participants[streamId] ||
             !this.participants[streamId][socket.id]
           ) {
@@ -948,6 +985,18 @@ export class SocketService {
         }
       });
 
+      socket.onAny((event, ...args) => {
+        console.log(`EVENT RECIEVED IN BE: ${event}`, args);
+      });
+
+      const originalEmit = socket.emit.bind(socket);
+      (socket as any).emit = function <Ev extends string>(
+        event: Ev,
+        ...args: any[]
+      ): boolean {
+        console.log(`[SOCKET SEND] ${event}`, args);
+        return originalEmit(event, ...args);
+      };
       socket.on("disconnect", async () => {
         try {
           await this.cleanupParticipant(socket);
